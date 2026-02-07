@@ -5,41 +5,63 @@ build-backend = "hatchling.build"
 [project]
 name = "aiortp"
 version = "0.1.0"
-description = "Asyncio RTP/RTCP audio library"
+description = "Asyncio RTP/RTCP audio library for Python"
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.11"
 authors = [
-    { name = "quintana" },
+    { name = "Sylvain Boily", email = "sylvainboilydroid@gmail.com" },
 ]
+keywords = ["rtp", "rtcp", "audio", "asyncio", "voip", "sip", "g711", "dtmf", "telephony"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: AsyncIO",
     "Intended Audience :: Developers",
+    "Intended Audience :: Telecommunications Industry",
     "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Telephony",
     "Topic :: Multimedia :: Sound/Audio",
+    "Typing :: Typed",
 ]
 
 [project.optional-dependencies]
 opus = ["opuslib"]
 dev = [
-    "pytest",
-    "pytest-asyncio",
-    "mypy",
-    "ruff",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "build>=1.0",
+    "twine>=5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/anganyAI/aiortp"
+Repository = "https://github.com/anganyAI/aiortp"
+Issues = "https://github.com/anganyAI/aiortp/issues"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/examples",
+    "/README.md",
+    "/LICENSE",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aiortp"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.mypy]
+python_version = "3.11"
 strict = true
 
 [tool.ruff]
