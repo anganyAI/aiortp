@@ -294,6 +294,11 @@ class RTPSession:
         self._rtcp_transport.send(bytes(bye), self._remote_rtcp_addr)
 
     @property
+    def codec(self) -> Optional[Codec]:
+        """The codec used by this session, or ``None`` if not configured."""
+        return self._codec
+
+    @property
     def stats(self) -> dict[str, Any]:
         """Return session statistics."""
         result: dict[str, Any] = {

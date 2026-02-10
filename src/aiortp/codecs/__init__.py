@@ -9,6 +9,7 @@ from .pcm import L16Codec
 
 class PayloadType(IntEnum):
     PCMU = 0
+    G722 = 9
     PCMA = 8
     L16 = 11
 
@@ -34,6 +35,14 @@ register_codec(PayloadType.PCMU, PcmuCodec)
 register_codec(PayloadType.PCMA, PcmaCodec)
 register_codec(PayloadType.L16, L16Codec)
 
+# Try to register G.722 if available
+try:
+    from .g722 import G722Codec
+
+    register_codec(PayloadType.G722, G722Codec)
+except ImportError:
+    pass
+
 # Try to register Opus if available
 try:
     from .opus import OpusCodec
@@ -44,6 +53,7 @@ except ImportError:
 
 __all__ = [
     "Codec",
+    "G722Codec",
     "PayloadType",
     "PcmuCodec",
     "PcmaCodec",

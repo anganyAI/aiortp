@@ -29,6 +29,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+g722 = ["G722>=1.2"]
 opus = ["opuslib"]
 dev = [
     "pytest>=8.0",
