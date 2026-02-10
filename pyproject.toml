@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aiortp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Asyncio RTP/RTCP audio library for Python"
 readme = "README.md"
 license = "BSD-3-Clause"
