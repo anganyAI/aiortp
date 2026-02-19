@@ -4,6 +4,7 @@ from .packet import RtpPacket
 from .utils import uint16_add
 
 MAX_MISORDER = 100
+MAX_AUDIO_GAP = 3  # max consecutive lost packets to skip in audio mode
 
 
 class JitterFrame:
@@ -14,7 +15,11 @@ class JitterFrame:
 
 class JitterBuffer:
     def __init__(
-        self, capacity: int, prefetch: int = 0, is_video: bool = False
+        self,
+        capacity: int,
+        prefetch: int = 0,
+        is_video: bool = False,
+        skip_audio_gaps: bool = False,
     ) -> None:
         assert capacity & (capacity - 1) == 0, "capacity must be a power of 2"
         self._capacity = capacity
@@ -22,6 +27,7 @@ class JitterBuffer:
         self._packets: list[Optional[RtpPacket]] = [None for i in range(capacity)]
         self._prefetch = prefetch
         self._is_video = is_video
+        self._skip_audio_gaps = skip_audio_gaps and not is_video
 
     @property
     def capacity(self) -> int:
@@ -71,7 +77,26 @@ class JitterBuffer:
             pos = (self._origin + count) % self._capacity  # type: ignore[operator]
             packet = self._packets[pos]
             if packet is None:
+                if self._skip_audio_gaps and self._has_later_packet(count, timestamp):
+                    # Audio gap handling: a received packet exists after this
+                    # gap, so the missing slot is a lost packet.  Complete the
+                    # current in-progress frame and continue scanning.
+                    if packets:
+                        if frame is None:
+                            frame = JitterFrame(
+                                data=b"".join([x.payload for x in packets]),
+                                timestamp=timestamp,
+                            )
+                            remove = count
+                        frames += 1
+                        if frames >= self._prefetch:
+                            self.remove(remove)
+                            return frame
+                        packets = []
+                        timestamp = None
+                    continue
                 break
+
             if timestamp is None:
                 timestamp = packet.timestamp
             elif packet.timestamp != timestamp:
@@ -96,6 +121,28 @@ class JitterBuffer:
             packets.append(packet)
 
         return None
+
+    def _has_later_packet(
+        self, gap_offset: int, current_timestamp: Optional[int] = None
+    ) -> bool:
+        """Check if a received packet with a *different* timestamp exists after the gap.
+
+        This prevents same-timestamp packets (e.g. video fragments) from
+        being split across gap boundaries when ``skip_audio_gaps`` is
+        enabled.
+        """
+        for g in range(1, MAX_AUDIO_GAP + 1):
+            total = gap_offset + g
+            if total >= self._capacity:
+                return False
+            pos = (self._origin + total) % self._capacity  # type: ignore[operator]
+            pkt = self._packets[pos]
+            if pkt is not None:
+                # Only skip if the packet after the gap starts a new frame
+                if current_timestamp is not None and pkt.timestamp == current_timestamp:
+                    return False
+                return True
+        return False
 
     def remove(self, count: int) -> None:
         assert count <= self._capacity

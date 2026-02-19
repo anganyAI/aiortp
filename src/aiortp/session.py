@@ -37,6 +37,9 @@ class RTPSession:
         dtmf_payload_type: int = 101,
         cname: str = "aiortp",
         rtcp_interval: float = 5.0,
+        jitter_capacity: int = 16,
+        jitter_prefetch: int = 4,
+        skip_audio_gaps: bool = False,
     ) -> None:
         self._payload_type = payload_type
         self._codec = codec
@@ -57,7 +60,11 @@ class RTPSession:
         self._dtmf_sender: Optional[DtmfSender] = None
 
         # Receiver
-        self._jitter_buffer = JitterBuffer(capacity=16, prefetch=4)
+        self._jitter_buffer = JitterBuffer(
+            capacity=jitter_capacity,
+            prefetch=jitter_prefetch,
+            skip_audio_gaps=skip_audio_gaps,
+        )
         self._stream_stats: Optional[StreamStatistics] = None
 
         # RTCP
@@ -85,6 +92,9 @@ class RTPSession:
         dtmf_payload_type: int = 101,
         cname: str = "aiortp",
         rtcp_interval: float = 5.0,
+        jitter_capacity: int = 16,
+        jitter_prefetch: int = 4,
+        skip_audio_gaps: bool = False,
     ) -> "RTPSession":
         """Async factory to create and bind an RTP session."""
         if codec is None:
@@ -98,6 +108,9 @@ class RTPSession:
             dtmf_payload_type=dtmf_payload_type,
             cname=cname,
             rtcp_interval=rtcp_interval,
+            jitter_capacity=jitter_capacity,
+            jitter_prefetch=jitter_prefetch,
+            skip_audio_gaps=skip_audio_gaps,
         )
         session._loop = asyncio.get_running_loop()
         session._remote_addr = remote_addr
@@ -160,7 +173,10 @@ class RTPSession:
         try:
             packet = RtpPacket.parse(data)
         except ValueError:
-            logger.warning("Failed to parse RTP packet")
+            header = data[:20].hex() if len(data) >= 20 else data.hex()
+            logger.warning(
+                "Failed to parse RTP packet: len=%d header=%s", len(data), header
+            )
             return
 
         # Check for DTMF
