@@ -1,6 +1,13 @@
-from .packet import RtpPacket
+import logging
+
+from .packet import RTP_HISTORY_SIZE, RtpPacket
 from .transport import RtpTransport
 from .utils import random16, random32, uint16_add, uint32_add
+
+logger = logging.getLogger(__name__)
+
+# Number of packets to keep for NACK retransmission
+_HISTORY_CAPACITY = RTP_HISTORY_SIZE
 
 
 class RtpSender:
@@ -19,6 +26,9 @@ class RtpSender:
         self._packets_sent = 0
         self._octets_sent = 0
         self._last_rtp_timestamp = 0
+
+        # Packet history for NACK retransmission (seq -> serialized bytes)
+        self._history: dict[int, bytes] = {}
 
         # Auto-timestamp state
         self._current_timestamp = random32()
@@ -85,10 +95,45 @@ class RtpSender:
         )
         data = packet.serialize()
         self._transport.send(data, addr)
+
+        # Store in history for NACK retransmission
+        seq = self._sequence_number
+        self._history[seq] = data
+        self._evict_old_history(seq)
+
         self._sequence_number = uint16_add(self._sequence_number, 1)
         self._packets_sent += 1
         self._octets_sent += len(payload)
         self._last_rtp_timestamp = timestamp
+
+    def _evict_old_history(self, current_seq: int) -> None:
+        """Remove history entries older than _HISTORY_CAPACITY."""
+        if len(self._history) <= _HISTORY_CAPACITY:
+            return
+        min_seq = uint16_add(current_seq, -_HISTORY_CAPACITY)
+        # Remove entries outside the valid window
+        for seq in list(self._history):
+            # Check if seq is before min_seq (with wraparound)
+            diff = (min_seq - seq) & 0xFFFF
+            if diff < 0x8000 and diff > 0:
+                del self._history[seq]
+
+    def retransmit(
+        self, seq_numbers: list[int], addr: tuple[str, int] | None = None,
+    ) -> int:
+        """Retransmit packets requested by NACK.
+
+        Returns the number of packets actually retransmitted.
+        """
+        count = 0
+        for seq in seq_numbers:
+            data = self._history.get(seq)
+            if data is not None:
+                self._transport.send(data, addr)
+                count += 1
+        if count > 0:
+            logger.debug("Retransmitted %d/%d NACKed packets", count, len(seq_numbers))
+        return count
 
     def send_frame(
         self,

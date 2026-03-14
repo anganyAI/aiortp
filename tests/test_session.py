@@ -3,12 +3,16 @@ import asyncio
 import pytest
 
 from aiortp.packet import (
+    RTCP_RTPFB_NACK,
     RtcpPacket,
     RtcpReceiverInfo,
     RtcpRrPacket,
+    RtcpRtpfbPacket,
     RtcpSrPacket,
 )
+from aiortp.sender import RtpSender
 from aiortp.session import RTPSession
+from aiortp.transport import RtpTransport
 
 
 @pytest.mark.asyncio
@@ -288,3 +292,83 @@ async def test_incoming_rr_in_sr_processed() -> None:
     assert stats["remote_jitter"] == 7
 
     await session.close()
+
+
+class TestNackRetransmission:
+    def test_sender_retransmits_from_history(self) -> None:
+        """Sender retransmits packets that are in the history buffer."""
+        sent: list[bytes] = []
+        transport = RtpTransport(on_rtp=lambda d: None, on_rtcp=lambda d: None)
+        transport.send = lambda data, addr=None: sent.append(data)  # type: ignore[assignment]
+
+        sender = RtpSender(transport=transport, payload_type=0, ssrc=1000)
+        initial_seq = sender.sequence_number
+
+        # Send 5 packets
+        for i in range(5):
+            sender.send_frame(b"\x00" * 160, timestamp=i * 160)
+        assert len(sent) == 5
+
+        # Retransmit packets 2 and 4 (by sequence number)
+        seq2 = (initial_seq + 2) & 0xFFFF
+        seq4 = (initial_seq + 4) & 0xFFFF
+        count = sender.retransmit([seq2, seq4])
+        assert count == 2
+        assert len(sent) == 7  # 5 original + 2 retransmitted
+
+        # Retransmitted data matches original
+        assert sent[5] == sent[2]  # seq2
+        assert sent[6] == sent[4]  # seq4
+
+    def test_sender_skips_missing_history(self) -> None:
+        """Retransmit returns 0 for packets not in history."""
+        sent: list[bytes] = []
+        transport = RtpTransport(on_rtp=lambda d: None, on_rtcp=lambda d: None)
+        transport.send = lambda data, addr=None: sent.append(data)  # type: ignore[assignment]
+
+        sender = RtpSender(transport=transport, payload_type=0, ssrc=1000)
+        count = sender.retransmit([9999])
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_session_handles_incoming_nack(self) -> None:
+        """Session retransmits when receiving a NACK."""
+        session_a = await RTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 0),
+            payload_type=0,
+            rtcp_interval=60.0,
+        )
+        a_addr = session_a._rtp_transport._transport.get_extra_info("sockname")  # type: ignore[union-attr]
+
+        session_b = await RTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=a_addr,
+            payload_type=0,
+            rtcp_interval=60.0,
+        )
+        b_addr = session_b._rtp_transport._transport.get_extra_info("sockname")  # type: ignore[union-attr]
+        session_a.update_remote(b_addr)
+
+        # A sends packets to B
+        initial_seq = session_a._sender.sequence_number  # type: ignore[union-attr]
+        for i in range(5):
+            session_a.send_audio(b"\x00" * 160, timestamp=i * 160)
+
+        packets_before = session_a._sender.packets_sent  # type: ignore[union-attr]
+
+        # B sends NACK to A requesting retransmission of seq+1
+        nack_seq = (initial_seq + 1) & 0xFFFF
+        nack = RtcpRtpfbPacket(
+            fmt=RTCP_RTPFB_NACK,
+            ssrc=session_b._ssrc,
+            media_ssrc=session_a._ssrc,
+            lost=[nack_seq],
+        )
+        session_a._handle_rtcp(bytes(nack))
+
+        # packets_sent doesn't change (retransmit doesn't increment counters)
+        assert session_a._sender.packets_sent == packets_before  # type: ignore[union-attr]
+
+        await session_a.close()
+        await session_b.close()

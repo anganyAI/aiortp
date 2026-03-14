@@ -18,6 +18,7 @@ from .packet import (
     RtcpByePacket,
     RtcpReceiverInfo,
     RtcpRrPacket,
+    RtcpRtpfbPacket,
     RtcpSdesPacket,
     RtcpSenderInfo,
     RtcpSourceInfo,
@@ -247,6 +248,12 @@ class BaseRTPSession:
         """Record an incoming SR for LSR/DLSR computation."""
         self._last_sr_ntp = ntp_timestamp
         self._last_sr_received_at = time.monotonic()
+
+    def _handle_incoming_nack(self, packet: RtcpRtpfbPacket) -> None:
+        """Retransmit packets requested by a NACK."""
+        if self._sender is None or not packet.lost:
+            return
+        self._sender.retransmit(packet.lost, self._remote_addr)
 
     def _process_receiver_reports(self, reports: list[RtcpReceiverInfo]) -> None:
         """Process incoming RR blocks from SR or RR packets."""

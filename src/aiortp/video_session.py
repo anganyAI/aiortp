@@ -303,6 +303,11 @@ class VideoRTPSession(BaseRTPSession):
                 self._process_receiver_reports(packet.reports)
             elif isinstance(packet, RtcpRrPacket):
                 self._process_receiver_reports(packet.reports)
+            elif (
+                isinstance(packet, RtcpRtpfbPacket)
+                and packet.fmt == RTCP_RTPFB_NACK
+            ):
+                self._handle_incoming_nack(packet)
             elif isinstance(packet, RtcpByePacket):
                 logger.info("Video: received RTCP BYE from %s", packet.sources)
 

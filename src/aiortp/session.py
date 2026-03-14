@@ -10,9 +10,11 @@ from .port_allocator import PortAllocator
 from .dtmf import DtmfReceiver, DtmfSender
 from .jitterbuffer import JitterBuffer
 from .packet import (
+    RTCP_RTPFB_NACK,
     RtcpByePacket,
     RtcpPacket,
     RtcpRrPacket,
+    RtcpRtpfbPacket,
     RtcpSrPacket,
     RtpPacket,
 )
@@ -165,6 +167,11 @@ class RTPSession(BaseRTPSession):
                 self._process_receiver_reports(packet.reports)
             elif isinstance(packet, RtcpRrPacket):
                 self._process_receiver_reports(packet.reports)
+            elif (
+                isinstance(packet, RtcpRtpfbPacket)
+                and packet.fmt == RTCP_RTPFB_NACK
+            ):
+                self._handle_incoming_nack(packet)
             elif isinstance(packet, RtcpByePacket):
                 logger.info("Received RTCP BYE from %s", packet.sources)
 
