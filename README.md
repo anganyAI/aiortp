@@ -1,5 +1,7 @@
 # aiortp
 
+[![CI](https://github.com/anganyAI/aiortp/actions/workflows/ci.yml/badge.svg)](https://github.com/anganyAI/aiortp/actions/workflows/ci.yml)
+
 Asyncio RTP/RTCP library for Python — audio and video.
 
 Plain RTP/RTCP for audio and video — no WebRTC, no ICE, no DTLS. Built for telephony, VoIP, and video streaming applications where you need direct control over RTP streams.
@@ -11,10 +13,12 @@ Portions derived from [aiortc](https://github.com/aiortc/aiortc) by Jeremy Lain�
 - **Pure Python** — zero required dependencies, Python >=3.11
 - **AsyncIO native** — built on `asyncio.DatagramProtocol`
 - **Audio codecs** — G.711 µ-law/A-law, L16, G.722 (`pip install aiortp[g722]`), Opus (`pip install aiortp[opus]`)
-- **Video codecs** — H.264 (RFC 6184) and VP9 (RFC 9628) depacketization/packetization
-- **RTCP** — Sender Reports, SDES, BYE, PLI, NACK with RFC 3550 randomized intervals
+- **Video codecs** — H.264 (RFC 6184), VP8 (RFC 7741), VP9 (RFC 9628) depacketization/packetization
+- **RTCP** — Sender Reports (with real RTP timestamps), Receiver Reports, SDES, BYE, PLI, NACK
 - **DTMF** — RFC 4733 telephone-event send/receive with redundant end packets
 - **Jitter buffer** — reordering for both audio (timestamp boundaries) and video (marker-bit frame detection)
+- **Auto-timestamps** — optional automatic RTP timestamp generation for audio and video
+- **Port allocation** — `PortAllocator` for managed even/odd RTP/RTCP port pairs
 - **STUN** — inline Binding Response for basic ICE connectivity
 - **Fully typed** — PEP 561 `py.typed` marker included
 
@@ -55,10 +59,10 @@ async def main():
 
     session_b.on_audio = on_audio
 
-    # Send PCM audio (auto-encoded to µ-law)
+    # Send with auto-incrementing timestamps (160 samples/frame for PCMU)
     pcm = b"\x00" * 320  # 160 samples of silence (20ms at 8kHz)
     for i in range(10):
-        session_a.send_audio_pcm(pcm, timestamp=i * 160)
+        session_a.send_audio_pcm_auto(pcm)
 
     await asyncio.sleep(1)
     await session_a.close()
@@ -77,7 +81,8 @@ async def main():
     sender = await VideoRTPSession.create(
         local_addr=("127.0.0.1", 20000),
         remote_addr=("127.0.0.1", 20002),
-        codec="h264",
+        codec="h264",  # also "vp8" or "vp9"
+        fps=30,
     )
 
     receiver = await VideoRTPSession.create(
@@ -91,11 +96,11 @@ async def main():
 
     receiver.on_frame = on_frame
 
-    # Send H.264 NAL units (SPS + PPS + IDR)
+    # Send H.264 NAL units with auto-incrementing timestamps
     sps = bytes([0x67, 0x42, 0x00, 0x1E])
     pps = bytes([0x68, 0xCE, 0x38, 0x80])
     idr = bytes([0x65]) + b"\x00" * 100
-    sender.send_frame([sps, pps, idr], timestamp=0, keyframe=True)
+    sender.send_frame_auto([sps, pps, idr], keyframe=True)
 
     await asyncio.sleep(1)
     await sender.close()
@@ -103,8 +108,6 @@ async def main():
 
 asyncio.run(main())
 ```
-
-VP9 works the same way — pass `codec="vp9"` to `VideoRTPSession.create()`.
 
 ## DTMF
 
@@ -130,6 +133,23 @@ def on_keyframe_needed() -> None:
     print("Remote requested a keyframe")
 
 sender.on_keyframe_needed = on_keyframe_needed
+```
+
+## Port Allocator
+
+```python
+from aiortp import PortAllocator, RTPSession
+
+allocator = PortAllocator(port_range=(10000, 20000))
+
+# Session will use an even/odd port pair from the allocator
+session = await RTPSession.create(
+    local_addr=("0.0.0.0", 0),
+    remote_addr=("10.0.0.1", 10000),
+    payload_type=0,
+    port_allocator=allocator,
+)
+# Ports are released automatically on close
 ```
 
 ## Codec Registry
@@ -169,14 +189,14 @@ if is_rtcp(data):
 ## Video Depacketizers (Standalone)
 
 ```python
-from aiortp import H264Depacketizer, VP9Depacketizer
+from aiortp import H264Depacketizer, VP8Depacketizer, VP9Depacketizer
 
 # H.264: feed RTP payloads, get NAL units
 depkt = H264Depacketizer()
 nals = depkt.feed(rtp_payload, marker=is_last_packet)
 
-# VP9: feed RTP payloads, get (frame_data, is_keyframe) tuples
-depkt = VP9Depacketizer()
+# VP8/VP9: feed RTP payloads, get (frame_data, is_keyframe) tuples
+depkt = VP8Depacketizer()
 frames = depkt.feed(rtp_payload, marker=is_last_packet)
 ```
 
