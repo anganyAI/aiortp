@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from aiortp.h264 import (
-    H264Depacketizer,
-    H264Packetizer,
     _FU_A,
     _FU_E_BIT,
     _FU_S_BIT,
     _STAP_A,
+    H264Depacketizer,
+    H264Packetizer,
     is_keyframe_nal,
 )
-
 
 # ── is_keyframe_nal ──────────────────────────────────────────
 

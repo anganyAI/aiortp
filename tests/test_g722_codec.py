@@ -13,10 +13,10 @@ from aiortp.codecs.base import Codec
 # G722 C extension may not be installed — skip tests if unavailable.
 g722_available = False
 try:
-    from G722 import G722 as _G722Check  # type: ignore[import-untyped]
+    import importlib.util
 
-    g722_available = True
-except ImportError:
+    g722_available = importlib.util.find_spec("G722") is not None
+except (ImportError, ValueError):
     pass
 
 if g722_available:

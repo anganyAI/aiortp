@@ -57,7 +57,7 @@ async def test_loopback_raw() -> None:
 
     try:
         await asyncio.wait_for(event.wait(), timeout=2.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
 
     # Verify at least one frame was received

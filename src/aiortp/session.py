@@ -2,11 +2,9 @@
 
 import logging
 from collections.abc import Callable
-from typing import Optional
 
 from .base_session import BaseRTPSession
 from .codecs import Codec, get_codec
-from .port_allocator import PortAllocator
 from .dtmf import DtmfReceiver, DtmfSender
 from .jitterbuffer import JitterBuffer
 from .packet import (
@@ -18,6 +16,7 @@ from .packet import (
     RtcpSrPacket,
     RtpPacket,
 )
+from .port_allocator import PortAllocator
 from .stats import StreamStatistics
 
 logger = logging.getLogger(__name__)
@@ -27,8 +26,8 @@ class RTPSession(BaseRTPSession):
     def __init__(
         self,
         payload_type: int,
-        codec: Optional[Codec] = None,
-        ssrc: Optional[int] = None,
+        codec: Codec | None = None,
+        ssrc: int | None = None,
         clock_rate: int = 8000,
         dtmf_payload_type: int = 101,
         cname: str = "aiortp",
@@ -36,7 +35,7 @@ class RTPSession(BaseRTPSession):
         jitter_capacity: int = 16,
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
-        port_allocator: Optional[PortAllocator] = None,
+        port_allocator: PortAllocator | None = None,
     ) -> None:
         super().__init__(
             payload_type=payload_type,
@@ -57,11 +56,11 @@ class RTPSession(BaseRTPSession):
         )
 
         # Callbacks
-        self.on_audio: Optional[Callable[[bytes, int], None]] = None
-        self.on_dtmf: Optional[Callable[[str, int], None]] = None
+        self.on_audio: Callable[[bytes, int], None] | None = None
+        self.on_dtmf: Callable[[str, int], None] | None = None
 
         # DTMF sender (set during create)
-        self._dtmf_sender: Optional[DtmfSender] = None
+        self._dtmf_sender: DtmfSender | None = None
 
     @classmethod
     async def create(
@@ -69,8 +68,8 @@ class RTPSession(BaseRTPSession):
         local_addr: tuple[str, int],
         remote_addr: tuple[str, int],
         payload_type: int,
-        codec: Optional[Codec] = None,
-        ssrc: Optional[int] = None,
+        codec: Codec | None = None,
+        ssrc: int | None = None,
         clock_rate: int = 8000,
         dtmf_payload_type: int = 101,
         cname: str = "aiortp",
@@ -78,7 +77,7 @@ class RTPSession(BaseRTPSession):
         jitter_capacity: int = 16,
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
-        port_allocator: Optional[PortAllocator] = None,
+        port_allocator: PortAllocator | None = None,
     ) -> "RTPSession":
         """Async factory to create and bind an RTP session."""
         if codec is None:
@@ -176,10 +175,10 @@ class RTPSession(BaseRTPSession):
                 logger.info("Received RTCP BYE from %s", packet.sources)
 
     @property
-    def _dtmf_receiver(self) -> Optional[DtmfReceiver]:
+    def _dtmf_receiver(self) -> DtmfReceiver | None:
         if not hasattr(self, "_dtmf_receiver_instance"):
             if self.on_dtmf is not None:
-                self._dtmf_receiver_instance: Optional[DtmfReceiver] = DtmfReceiver(
+                self._dtmf_receiver_instance: DtmfReceiver | None = DtmfReceiver(
                     self.on_dtmf
                 )
             else:
@@ -229,6 +228,6 @@ class RTPSession(BaseRTPSession):
         )
 
     @property
-    def codec(self) -> Optional[Codec]:
+    def codec(self) -> Codec | None:
         """The codec used by this session, or ``None`` if not configured."""
         return self._codec

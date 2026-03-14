@@ -3,7 +3,6 @@ import logging
 import socket
 from collections.abc import Callable
 from struct import pack, unpack_from
-from typing import Optional
 
 from .packet import is_rtcp
 
@@ -50,8 +49,8 @@ class RtpTransport(asyncio.DatagramProtocol):
     ) -> None:
         self._on_rtp = on_rtp
         self._on_rtcp = on_rtcp
-        self._transport: Optional[asyncio.DatagramTransport] = None
-        self._remote_addr: Optional[tuple[str, int]] = None
+        self._transport: asyncio.DatagramTransport | None = None
+        self._remote_addr: tuple[str, int] | None = None
         self._closed = asyncio.Event()
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -72,10 +71,10 @@ class RtpTransport(asyncio.DatagramProtocol):
     def error_received(self, exc: Exception) -> None:
         logger.warning("Transport error: %s", exc)
 
-    def connection_lost(self, exc: Optional[Exception]) -> None:
+    def connection_lost(self, exc: Exception | None) -> None:
         self._closed.set()
 
-    def send(self, data: bytes, addr: Optional[tuple[str, int]] = None) -> None:
+    def send(self, data: bytes, addr: tuple[str, int] | None = None) -> None:
         if self._transport is None:
             return
         target = addr or self._remote_addr

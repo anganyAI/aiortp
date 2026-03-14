@@ -3,7 +3,6 @@
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Optional
 
 from .packet import RtpPacket
 from .sender import RtpSender
@@ -63,8 +62,8 @@ class DtmfReceiver:
 
     def __init__(self, on_dtmf: Callable[[str, int], None]) -> None:
         self._on_dtmf = on_dtmf
-        self._current_event: Optional[int] = None
-        self._current_timestamp: Optional[int] = None
+        self._current_event: int | None = None
+        self._current_timestamp: int | None = None
         self._end_seen = False
 
     def handle_packet(self, packet: RtpPacket) -> None:

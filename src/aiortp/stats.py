@@ -1,5 +1,4 @@
 import time
-from typing import Optional
 
 from .packet import RTP_HISTORY_SIZE, RtpPacket, clamp_packets_lost
 from .utils import uint16_add, uint16_gt
@@ -7,7 +6,7 @@ from .utils import uint16_add, uint16_gt
 
 class NackGenerator:
     def __init__(self) -> None:
-        self.max_seq: Optional[int] = None
+        self.max_seq: int | None = None
         self.missing: set[int] = set()
 
     def add(self, packet: RtpPacket) -> bool:
@@ -51,16 +50,16 @@ class NackGenerator:
 
 class StreamStatistics:
     def __init__(self, clockrate: int) -> None:
-        self.base_seq: Optional[int] = None
-        self.max_seq: Optional[int] = None
+        self.base_seq: int | None = None
+        self.max_seq: int | None = None
         self.cycles = 0
         self.packets_received = 0
 
         # jitter
         self._clockrate = clockrate
         self._jitter_q4 = 0
-        self._last_arrival: Optional[int] = None
-        self._last_timestamp: Optional[int] = None
+        self._last_arrival: int | None = None
+        self._last_timestamp: int | None = None
 
         # fraction lost
         self._expected_prior = 0

@@ -170,7 +170,7 @@ class BaseRTPSession:
         """Periodic RTCP sender loop."""
         try:
             while not self._closed:
-                interval = self._rtcp_interval * (0.5 + random.random())
+                interval = self._rtcp_interval * (0.5 + random.random())  # noqa: S311  # nosec B311 — RFC 3550 jitter
                 await asyncio.sleep(interval)
                 if self._closed:
                     break

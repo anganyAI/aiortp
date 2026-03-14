@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from struct import pack, unpack, unpack_from
-from typing import Any, Optional, Union
+from typing import Any
 
 # used for NACK and retransmission
 RTP_HISTORY_SIZE = 128
@@ -34,13 +34,13 @@ RTCP_PSFB_APP = 15
 
 @dataclass
 class HeaderExtensions:
-    abs_send_time: Optional[int] = None
+    abs_send_time: int | None = None
     audio_level: Any = None
     mid: Any = None
     repaired_rtp_stream_id: Any = None
     rtp_stream_id: Any = None
-    transmission_offset: Optional[int] = None
-    transport_sequence_number: Optional[int] = None
+    transmission_offset: int | None = None
+    transport_sequence_number: int | None = None
 
 
 class HeaderExtensionsMap:
@@ -391,7 +391,7 @@ class RtcpRrPacket:
         ssrc = unpack("!L", data[0:4])[0]
         pos = 4
         reports = []
-        for r in range(count):
+        for _r in range(count):
             reports.append(RtcpReceiverInfo.parse(data[pos : pos + 24]))
             pos += 24
         return cls(ssrc=ssrc, reports=reports)
@@ -461,7 +461,7 @@ class RtcpSdesPacket:
     def parse(cls, data: bytes, count: int) -> "RtcpSdesPacket":
         pos = 0
         chunks = []
-        for r in range(count):
+        for _r in range(count):
             if len(data) < pos + 4:
                 raise ValueError("RTCP SDES source is truncated")
             ssrc = unpack_from("!L", data, pos)[0]
@@ -506,20 +506,20 @@ class RtcpSrPacket:
         sender_info = RtcpSenderInfo.parse(data[4:24])
         pos = 24
         reports = []
-        for r in range(count):
+        for _r in range(count):
             reports.append(RtcpReceiverInfo.parse(data[pos : pos + 24]))
             pos += 24
         return RtcpSrPacket(ssrc=ssrc, sender_info=sender_info, reports=reports)
 
 
-AnyRtcpPacket = Union[
-    RtcpByePacket,
-    RtcpPsfbPacket,
-    RtcpRrPacket,
-    RtcpRtpfbPacket,
-    RtcpSdesPacket,
-    RtcpSrPacket,
-]
+AnyRtcpPacket = (
+    RtcpByePacket
+    | RtcpPsfbPacket
+    | RtcpRrPacket
+    | RtcpRtpfbPacket
+    | RtcpSdesPacket
+    | RtcpSrPacket
+)
 
 
 class RtcpPacket:
@@ -627,7 +627,7 @@ class RtpPacket:
         )
 
         pos = RTP_HEADER_LENGTH
-        for i in range(0, cc):
+        for _i in range(0, cc):
             packet.csrc.append(unpack_from("!L", data, pos)[0])
             pos += 4
 

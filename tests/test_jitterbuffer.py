@@ -1,4 +1,3 @@
-from typing import Optional
 from unittest import TestCase
 
 from aiortp.jitterbuffer import JitterBuffer
@@ -7,7 +6,7 @@ from aiortp.packet import RtpPacket
 
 class JitterBufferTest(TestCase):
     def assertPackets(
-        self, jbuffer: JitterBuffer, expected: list[Optional[int]]
+        self, jbuffer: JitterBuffer, expected: list[int | None]
     ) -> None:
         found = [x.sequence_number if x else None for x in jbuffer._packets]
         self.assertEqual(found, expected)

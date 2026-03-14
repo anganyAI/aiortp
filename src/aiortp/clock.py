@@ -1,10 +1,10 @@
 import datetime
 
-NTP_EPOCH = datetime.datetime(1900, 1, 1, tzinfo=datetime.timezone.utc)
+NTP_EPOCH = datetime.datetime(1900, 1, 1, tzinfo=datetime.UTC)
 
 
 def current_datetime() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 def current_ntp_time() -> int:

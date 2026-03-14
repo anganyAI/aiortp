@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from aiortp.vp8 import (
-    VP8Depacketizer,
-    VP8Packetizer,
     _I_BIT,
     _L_BIT,
     _M_BIT,
     _S_BIT,
     _T_BIT,
     _X_BIT,
+    VP8Depacketizer,
+    VP8Packetizer,
     _parse_descriptor_offset,
     is_keyframe_vp8,
 )

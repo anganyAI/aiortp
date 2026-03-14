@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from aiortp.vp9 import (
-    VP9Depacketizer,
-    VP9Packetizer,
     _B_BIT,
     _E_BIT,
     _F_BIT,
@@ -12,6 +10,8 @@ from aiortp.vp9 import (
     _L_BIT,
     _M_BIT,
     _P_BIT,
+    VP9Depacketizer,
+    VP9Packetizer,
     _parse_descriptor_offset,
     is_keyframe_vp9,
 )

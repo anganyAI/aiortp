@@ -1,4 +1,4 @@
-.PHONY: install lint format test clean build-dist publish release
+.PHONY: install lint format security test check clean build-dist publish release
 
 install:
 	uv sync --extra dev
@@ -9,8 +9,13 @@ lint:
 format:
 	uv run ruff format src/ tests/
 
+security:
+	uv run bandit -r src/aiortp/ -c pyproject.toml
+
 test:
 	uv run pytest tests/ -v
+
+check: lint security test
 
 clean:
 	rm -rf dist/ build/ .mypy_cache/ .pytest_cache/ .ruff_cache/

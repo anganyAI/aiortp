@@ -1,4 +1,3 @@
-from typing import Optional
 
 from .packet import RtpPacket
 from .utils import uint16_add
@@ -23,8 +22,8 @@ class JitterBuffer:
     ) -> None:
         assert capacity & (capacity - 1) == 0, "capacity must be a power of 2"
         self._capacity = capacity
-        self._origin: Optional[int] = None
-        self._packets: list[Optional[RtpPacket]] = [None for i in range(capacity)]
+        self._origin: int | None = None
+        self._packets: list[RtpPacket | None] = [None for i in range(capacity)]
         self._prefetch = prefetch
         self._is_video = is_video
         self._skip_audio_gaps = skip_audio_gaps and not is_video
@@ -34,7 +33,7 @@ class JitterBuffer:
     def capacity(self) -> int:
         return self._capacity
 
-    def add(self, packet: RtpPacket) -> tuple[bool, Optional[JitterFrame]]:
+    def add(self, packet: RtpPacket) -> tuple[bool, JitterFrame | None]:
         pli_flag = False
         if self._origin is None:
             self._origin = packet.sequence_number
@@ -71,12 +70,12 @@ class JitterBuffer:
             pli_flag = True
         return pli_flag, frame
 
-    def _remove_frame(self, sequence_number: int) -> Optional[JitterFrame]:
+    def _remove_frame(self, sequence_number: int) -> JitterFrame | None:
         if self._is_video:
             return self._remove_video_frame()
         return self._remove_audio_frame()
 
-    def _remove_video_frame(self) -> Optional[JitterFrame]:
+    def _remove_video_frame(self) -> JitterFrame | None:
         """Remove a complete video frame using the RTP marker bit.
 
         RFC 3550 defines marker=1 as the last packet of a video frame.
@@ -118,7 +117,7 @@ class JitterBuffer:
         return None
 
     def _has_newer_video_frame_after(
-        self, gap_offset: int, current_ts: Optional[int],
+        self, gap_offset: int, current_ts: int | None,
     ) -> bool:
         """Check if a packet from a *different* frame exists after the gap.
 
@@ -137,7 +136,7 @@ class JitterBuffer:
                     return True
         return False
 
-    def _remove_audio_frame(self) -> Optional[JitterFrame]:
+    def _remove_audio_frame(self) -> JitterFrame | None:
         """Remove a complete audio frame using timestamp boundaries."""
         frame = None
         frames = 0
@@ -195,7 +194,7 @@ class JitterBuffer:
         return None
 
     def _has_later_packet(
-        self, gap_offset: int, current_timestamp: Optional[int] = None
+        self, gap_offset: int, current_timestamp: int | None = None
     ) -> bool:
         """Check if a received packet with a *different* timestamp exists after the gap.
 
@@ -218,7 +217,7 @@ class JitterBuffer:
 
     def remove(self, count: int) -> None:
         assert count <= self._capacity
-        for i in range(count):
+        for _i in range(count):
             pos = self._origin % self._capacity  # type: ignore[operator]
             self._packets[pos] = None
             self._origin = uint16_add(self._origin, 1)  # type: ignore[arg-type]

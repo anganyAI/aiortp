@@ -13,10 +13,12 @@ from aiortp.packet import (
 )
 from aiortp.video_session import VideoRTPSession
 
+_Pair = tuple[VideoRTPSession, VideoRTPSession]
+
 
 @pytest.fixture
 async def loopback_pair() -> (
-    tuple[VideoRTPSession, VideoRTPSession]
+    _Pair
 ):
     """Create two video sessions wired to each other."""
     session_a = await VideoRTPSession.create(
@@ -41,7 +43,7 @@ async def loopback_pair() -> (
 
 
 class TestVideoSessionSendReceive:
-    async def test_single_nal_delivery(self, loopback_pair: tuple[VideoRTPSession, VideoRTPSession]) -> None:
+    async def test_single_nal_delivery(self, loopback_pair: _Pair) -> None:
         """Single small NAL unit delivered immediately (no second frame needed)."""
         sender, receiver = loopback_pair
         received: list[tuple[bytes, int, bool]] = []
@@ -63,7 +65,7 @@ class TestVideoSessionSendReceive:
         assert received[0][1] == 90000
         assert received[0][2] is False  # non-IDR
 
-    async def test_keyframe_detection(self, loopback_pair: tuple[VideoRTPSession, VideoRTPSession]) -> None:
+    async def test_keyframe_detection(self, loopback_pair: _Pair) -> None:
         """IDR NAL unit detected as keyframe — delivered immediately."""
         sender, receiver = loopback_pair
         received: list[tuple[bytes, int, bool]] = []
@@ -82,7 +84,7 @@ class TestVideoSessionSendReceive:
         await asyncio.wait_for(event.wait(), timeout=2.0)
         assert received[0][2] is True  # keyframe
 
-    async def test_multi_nal_frame(self, loopback_pair: tuple[VideoRTPSession, VideoRTPSession]) -> None:
+    async def test_multi_nal_frame(self, loopback_pair: _Pair) -> None:
         """Multiple NALs in one frame (SPS + PPS + IDR) — delivered immediately."""
         sender, receiver = loopback_pair
         received: list[tuple[bytes, int, bool]] = []
@@ -110,7 +112,7 @@ class TestVideoSessionSendReceive:
 
 
 class TestVideoSessionStats:
-    async def test_stats_after_send(self, loopback_pair: tuple[VideoRTPSession, VideoRTPSession]) -> None:
+    async def test_stats_after_send(self, loopback_pair: _Pair) -> None:
         sender, receiver = loopback_pair
 
         nal = bytes([0x41]) + b"\x00" * 50
@@ -172,7 +174,7 @@ class TestVideoSessionPLI:
         finally:
             await session.close()
 
-    async def test_request_keyframe_sends_pli(self, loopback_pair: tuple[VideoRTPSession, VideoRTPSession]) -> None:
+    async def test_request_keyframe_sends_pli(self, loopback_pair: _Pair) -> None:
         """request_keyframe() sends a PLI packet."""
         sender, receiver = loopback_pair
 
@@ -222,7 +224,7 @@ class TestVideoSessionClose:
 
 class TestVideoSessionAutoTimestamp:
     async def test_send_frame_auto_increments_timestamp(
-        self, loopback_pair: tuple[VideoRTPSession, VideoRTPSession],
+        self, loopback_pair: _Pair,
     ) -> None:
         """Auto-timestamp increments by clock_rate/fps (3000 at 30fps)."""
         sender, receiver = loopback_pair
