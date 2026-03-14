@@ -53,10 +53,6 @@ class RTPSession(BaseRTPSession):
             skip_audio_gaps=skip_audio_gaps,
         )
 
-        # RTCP SR info
-        self._last_sr_ntp: Optional[int] = None
-        self._last_sr_rtp_ts: Optional[int] = None
-
         # Callbacks
         self.on_audio: Optional[Callable[[bytes, int], None]] = None
         self.on_dtmf: Optional[Callable[[str, int], None]] = None
@@ -130,6 +126,10 @@ class RTPSession(BaseRTPSession):
                 self._dtmf_receiver.handle_packet(packet)
             return
 
+        # Learn remote SSRC from first media packet
+        if self._remote_ssrc is None:
+            self._remote_ssrc = packet.ssrc
+
         # Initialize stream stats on first packet
         if self._stream_stats is None:
             self._stream_stats = StreamStatistics(clockrate=self._clock_rate)
@@ -160,8 +160,7 @@ class RTPSession(BaseRTPSession):
 
         for packet in packets:
             if isinstance(packet, RtcpSrPacket):
-                self._last_sr_ntp = packet.sender_info.ntp_timestamp
-                self._last_sr_rtp_ts = packet.sender_info.rtp_timestamp
+                self._record_incoming_sr(packet.sender_info.ntp_timestamp)
             elif isinstance(packet, RtcpByePacket):
                 logger.info("Received RTCP BYE from %s", packet.sources)
 

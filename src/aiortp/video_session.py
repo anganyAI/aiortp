@@ -21,6 +21,7 @@ from .packet import (
     RtcpPacket,
     RtcpPsfbPacket,
     RtcpRtpfbPacket,
+    RtcpSrPacket,
     RtpPacket,
 )
 from .port_allocator import PortAllocator
@@ -115,9 +116,6 @@ class VideoRTPSession(BaseRTPSession):
         # Sorted by sequence number before depacketization to ensure
         # correct fragment ordering regardless of arrival order.
         self._pending_payloads: dict[int, list[tuple[int, bytes]]] = {}
-
-        # Remote SSRC (learned from first inbound packet)
-        self._remote_ssrc: int | None = None
 
         # Callbacks
         self.on_frame: Callable[[bytes, int, bool], None] | None = None
@@ -296,6 +294,8 @@ class VideoRTPSession(BaseRTPSession):
             if isinstance(packet, RtcpPsfbPacket) and packet.fmt == RTCP_PSFB_PLI:
                 if self.on_keyframe_needed is not None:
                     self.on_keyframe_needed()
+            elif isinstance(packet, RtcpSrPacket):
+                self._record_incoming_sr(packet.sender_info.ntp_timestamp)
             elif isinstance(packet, RtcpByePacket):
                 logger.info("Video: received RTCP BYE from %s", packet.sources)
 

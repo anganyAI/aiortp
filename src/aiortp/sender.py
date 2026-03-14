@@ -18,6 +18,7 @@ class RtpSender:
         self._sequence_number = random16()
         self._packets_sent = 0
         self._octets_sent = 0
+        self._last_rtp_timestamp = 0
 
         # Auto-timestamp state
         self._current_timestamp = random32()
@@ -38,6 +39,10 @@ class RtpSender:
     @property
     def sequence_number(self) -> int:
         return self._sequence_number
+
+    @property
+    def last_rtp_timestamp(self) -> int:
+        return self._last_rtp_timestamp
 
     @property
     def current_timestamp(self) -> int:
@@ -83,6 +88,7 @@ class RtpSender:
         self._sequence_number = uint16_add(self._sequence_number, 1)
         self._packets_sent += 1
         self._octets_sent += len(payload)
+        self._last_rtp_timestamp = timestamp
 
     def send_frame(
         self,

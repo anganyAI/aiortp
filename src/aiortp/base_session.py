@@ -9,11 +9,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from typing import Any
 
 from . import clock
 from .packet import (
     RtcpByePacket,
+    RtcpReceiverInfo,
+    RtcpRrPacket,
     RtcpSdesPacket,
     RtcpSenderInfo,
     RtcpSourceInfo,
@@ -65,6 +68,13 @@ class BaseRTPSession:
 
         # RTCP
         self._rtcp_task: asyncio.Task[None] | None = None
+
+        # Incoming SR tracking (for LSR/DLSR in receiver reports)
+        self._last_sr_ntp: int | None = None
+        self._last_sr_received_at: float | None = None
+
+        # Remote SSRC (learned from first inbound packet by subclasses)
+        self._remote_ssrc: int | None = None
 
         # Port tracking for allocator release on close
         self._allocated_rtp_port: int | None = None
@@ -155,23 +165,15 @@ class BaseRTPSession:
                 await asyncio.sleep(interval)
                 if self._closed:
                     break
-                self._send_sr()
+                self._send_rtcp_report()
         except asyncio.CancelledError:
             pass
 
-    def _send_sr(self) -> None:
-        """Send RTCP Sender Report + SDES."""
-        if self._rtcp_transport is None or self._sender is None:
+    def _send_rtcp_report(self) -> None:
+        """Send SR (if sending) or RR (if receive-only), plus SDES."""
+        if self._rtcp_transport is None:
             return
-        sr = RtcpSrPacket(
-            ssrc=self._ssrc,
-            sender_info=RtcpSenderInfo(
-                ntp_timestamp=clock.current_ntp_time(),
-                rtp_timestamp=0,
-                packet_count=self._sender.packets_sent,
-                octet_count=self._sender.octets_sent,
-            ),
-        )
+
         sdes = RtcpSdesPacket(
             chunks=[
                 RtcpSourceInfo(
@@ -180,9 +182,63 @@ class BaseRTPSession:
                 )
             ]
         )
-        self._rtcp_transport.send(
-            bytes(sr) + bytes(sdes), self._remote_rtcp_addr
+
+        # Build receiver report block if we have inbound stats
+        rr_block = self._build_receiver_report()
+
+        if self._sender is not None and self._sender.packets_sent > 0:
+            sr = RtcpSrPacket(
+                ssrc=self._ssrc,
+                sender_info=RtcpSenderInfo(
+                    ntp_timestamp=clock.current_ntp_time(),
+                    rtp_timestamp=self._sender.last_rtp_timestamp,
+                    packet_count=self._sender.packets_sent,
+                    octet_count=self._sender.octets_sent,
+                ),
+                reports=[rr_block] if rr_block else [],
+            )
+            self._rtcp_transport.send(
+                bytes(sr) + bytes(sdes), self._remote_rtcp_addr
+            )
+        elif rr_block is not None:
+            rr = RtcpRrPacket(
+                ssrc=self._ssrc,
+                reports=[rr_block],
+            )
+            self._rtcp_transport.send(
+                bytes(rr) + bytes(sdes), self._remote_rtcp_addr
+            )
+
+    def _build_receiver_report(self) -> RtcpReceiverInfo | None:
+        """Build a receiver report block from stream statistics."""
+        if self._stream_stats is None or self._remote_ssrc is None:
+            return None
+
+        stats = self._stream_stats
+
+        # LSR: middle 32 bits of the last SR NTP timestamp
+        lsr = 0
+        dlsr = 0
+        if self._last_sr_ntp is not None and self._last_sr_received_at is not None:
+            lsr = (self._last_sr_ntp >> 16) & 0xFFFFFFFF
+            # DLSR: delay since last SR in 1/65536 seconds
+            delay = time.monotonic() - self._last_sr_received_at
+            dlsr = int(delay * 65536) & 0xFFFFFFFF
+
+        return RtcpReceiverInfo(
+            ssrc=self._remote_ssrc,
+            fraction_lost=stats.fraction_lost,
+            packets_lost=stats.packets_lost,
+            highest_sequence=stats.cycles + (stats.max_seq or 0),
+            jitter=stats.jitter,
+            lsr=lsr,
+            dlsr=dlsr,
         )
+
+    def _record_incoming_sr(self, ntp_timestamp: int) -> None:
+        """Record an incoming SR for LSR/DLSR computation."""
+        self._last_sr_ntp = ntp_timestamp
+        self._last_sr_received_at = time.monotonic()
 
     def _send_bye(self) -> None:
         """Send RTCP BYE."""
