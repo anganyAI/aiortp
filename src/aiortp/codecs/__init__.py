@@ -9,9 +9,13 @@ from .pcm import L16Codec
 
 class PayloadType(IntEnum):
     PCMU = 0
-    G722 = 9
     PCMA = 8
+    G722 = 9
     L16 = 11
+
+    # Dynamic payload types (video, standard SIP conventions)
+    H264 = 96
+    VP9 = 98
 
 
 _registry: dict[int, type[Codec]] = {}
@@ -53,7 +57,6 @@ except ImportError:
 
 __all__ = [
     "Codec",
-    "G722Codec",
     "PayloadType",
     "PcmuCodec",
     "PcmaCodec",

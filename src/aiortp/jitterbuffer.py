@@ -28,6 +28,7 @@ class JitterBuffer:
         self._prefetch = prefetch
         self._is_video = is_video
         self._skip_audio_gaps = skip_audio_gaps and not is_video
+        self._video_gap_skipped = False  # set when incomplete frame is dropped
 
     @property
     def capacity(self) -> int:
@@ -64,9 +65,80 @@ class JitterBuffer:
         pos = packet.sequence_number % self._capacity
         self._packets[pos] = packet
 
-        return pli_flag, self._remove_frame(packet.sequence_number)
+        self._video_gap_skipped = False
+        frame = self._remove_frame(packet.sequence_number)
+        if self._video_gap_skipped:
+            pli_flag = True
+        return pli_flag, frame
 
     def _remove_frame(self, sequence_number: int) -> Optional[JitterFrame]:
+        if self._is_video:
+            return self._remove_video_frame()
+        return self._remove_audio_frame()
+
+    def _remove_video_frame(self) -> Optional[JitterFrame]:
+        """Remove a complete video frame using the RTP marker bit.
+
+        RFC 3550 defines marker=1 as the last packet of a video frame.
+        This avoids waiting for the next timestamp, so frames are
+        delivered as soon as the last packet arrives.
+
+        If a gap is detected and a later packet exists (confirming the
+        gap is a lost packet, not just not-yet-arrived), the incomplete
+        frame is skipped and the scan restarts from the next received
+        packet.
+        """
+        packets: list[RtpPacket] = []
+
+        for count in range(self.capacity):
+            pos = (self._origin + count) % self._capacity  # type: ignore[operator]
+            packet = self._packets[pos]
+
+            if packet is None:
+                # Check if a packet from a LATER frame exists after the
+                # gap.  If so, the current frame is lost — skip it.
+                # If the later packet has the same timestamp, the missing
+                # packet might still arrive (reordering) — wait.
+                current_ts = packets[0].timestamp if packets else None
+                if self._has_newer_video_frame_after(count, current_ts):
+                    self._video_gap_skipped = True
+                    self.remove(count + 1)
+                    return self._remove_video_frame()
+                break  # no evidence of loss yet — wait
+
+            packets.append(packet)
+
+            if packet.marker:
+                self.remove(count + 1)
+                return JitterFrame(
+                    data=b"".join([p.payload for p in packets]),
+                    timestamp=packets[0].timestamp,
+                )
+
+        return None
+
+    def _has_newer_video_frame_after(
+        self, gap_offset: int, current_ts: Optional[int],
+    ) -> bool:
+        """Check if a packet from a *different* frame exists after the gap.
+
+        Returns True only if a later packet has a different RTP
+        timestamp, confirming the current frame's gap is a real loss
+        (not just reordering within the same frame).
+        """
+        for g in range(1, min(self._capacity - gap_offset, 64)):
+            total = gap_offset + g
+            if total >= self._capacity:
+                return False
+            pos = (self._origin + total) % self._capacity  # type: ignore[operator]
+            pkt = self._packets[pos]
+            if pkt is not None:
+                if current_ts is None or pkt.timestamp != current_ts:
+                    return True
+        return False
+
+    def _remove_audio_frame(self) -> Optional[JitterFrame]:
+        """Remove a complete audio frame using timestamp boundaries."""
         frame = None
         frames = 0
         packets: list[RtpPacket] = []

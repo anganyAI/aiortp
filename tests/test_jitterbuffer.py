@@ -257,7 +257,7 @@ class JitterBufferTest(TestCase):
         self.assertEqual(frame.timestamp, 1235)
 
     def test_remove_video_frame(self) -> None:
-        """Video jitter buffer."""
+        """Video frame delivered on marker bit (last packet of frame)."""
         jbuffer = JitterBuffer(capacity=128, is_video=True)
 
         pli_flag, frame = jbuffer.add(
@@ -270,16 +270,46 @@ class JitterBufferTest(TestCase):
         )
         self.assertIsNone(frame)
 
+        # marker=1 signals end of frame — delivers immediately
         pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=2, timestamp=1234, payload=b"0002")
-        )
-        self.assertIsNone(frame)
-
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=3, timestamp=1235, payload=b"0003")
+            RtpPacket(sequence_number=2, timestamp=1234, marker=1, payload=b"0002")
         )
         self.assertIsNotNone(frame)
         self.assertEqual(frame.data, b"000000010002")
+        self.assertEqual(frame.timestamp, 1234)
+
+    def test_video_single_packet_frame(self) -> None:
+        """Single-packet video frame delivered immediately on marker bit."""
+        jbuffer = JitterBuffer(capacity=128, is_video=True)
+
+        pli_flag, frame = jbuffer.add(
+            RtpPacket(sequence_number=0, timestamp=1234, marker=1, payload=b"KEY")
+        )
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame.data, b"KEY")
+        self.assertEqual(frame.timestamp, 1234)
+
+    def test_video_waits_for_gap_fill(self) -> None:
+        """Video frame not delivered if there's a gap before the marker."""
+        jbuffer = JitterBuffer(capacity=128, is_video=True)
+
+        pli_flag, frame = jbuffer.add(
+            RtpPacket(sequence_number=0, timestamp=1234, payload=b"P0")
+        )
+        self.assertIsNone(frame)
+
+        # Packet 2 arrives out of order (gap at seq=1)
+        pli_flag, frame = jbuffer.add(
+            RtpPacket(sequence_number=2, timestamp=1234, marker=1, payload=b"P2")
+        )
+        self.assertIsNone(frame)  # can't deliver — gap at seq=1
+
+        # Packet 1 fills the gap — frame now complete
+        pli_flag, frame = jbuffer.add(
+            RtpPacket(sequence_number=1, timestamp=1234, payload=b"P1")
+        )
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame.data, b"P0P1P2")
         self.assertEqual(frame.timestamp, 1234)
 
     def test_pli_flag(self) -> None:
