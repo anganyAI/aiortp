@@ -68,9 +68,7 @@ class RtpSender:
 
     def advance_timestamp(self) -> None:
         """Advance the auto-timestamp by one increment."""
-        self._current_timestamp = uint32_add(
-            self._current_timestamp, self._timestamp_increment
-        )
+        self._current_timestamp = uint32_add(self._current_timestamp, self._timestamp_increment)
 
     def send_raw(
         self,
@@ -119,7 +117,9 @@ class RtpSender:
                 del self._history[seq]
 
     def retransmit(
-        self, seq_numbers: list[int], addr: tuple[str, int] | None = None,
+        self,
+        seq_numbers: list[int],
+        addr: tuple[str, int] | None = None,
     ) -> int:
         """Retransmit packets requested by NACK.
 

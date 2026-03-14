@@ -31,8 +31,7 @@ class G722Codec(Codec):
     def __init__(self) -> None:
         if not _HAS_G722:
             raise ImportError(
-                "G722 is required for G.722 support. "
-                "Install with: pip install aiortp[g722]"
+                "G722 is required for G.722 support. Install with: pip install aiortp[g722]"
             )
         self._encoder = _G722Engine(16000, 64000)
         self._decoder = _G722Engine(16000, 64000)
@@ -59,7 +58,7 @@ class G722Codec(Codec):
             G.722 encoded bytes (160 bytes per frame).
         """
         num_samples = len(pcm) // 2
-        samples = struct.unpack(f"<{num_samples}h", pcm[:num_samples * 2])
+        samples = struct.unpack(f"<{num_samples}h", pcm[: num_samples * 2])
         return self._encoder.encode(tuple(samples))
 
     def decode(self, payload: bytes) -> bytes:

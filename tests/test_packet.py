@@ -65,9 +65,7 @@ class RtcpPacketTest(TestCase):
 
         with self.assertRaises(ValueError) as cm:
             RtcpPacket.parse(data)
-        self.assertEqual(
-            str(cm.exception), "RTCP payload-specific feedback length is invalid"
-        )
+        self.assertEqual(str(cm.exception), "RTCP payload-specific feedback length is invalid")
 
     def test_psfb_pli(self) -> None:
         data = load("rtcp_psfb_pli.bin")
@@ -110,9 +108,7 @@ class RtcpPacketTest(TestCase):
         for length in range(1, 4):
             with self.assertRaises(ValueError) as cm:
                 RtcpPacket.parse(data[0:length])
-            self.assertEqual(
-                str(cm.exception), "RTCP packet length is less than 4 bytes"
-            )
+            self.assertEqual(str(cm.exception), "RTCP packet length is less than 4 bytes")
 
         for length in range(4, 32):
             with self.assertRaises(ValueError) as cm:
@@ -126,9 +122,7 @@ class RtcpPacketTest(TestCase):
 
         pkt = self.ensureIsInstance(packets[0], RtcpSdesPacket)
         self.assertEqual(pkt.chunks[0].ssrc, 1831097322)
-        self.assertEqual(
-            pkt.chunks[0].items, [(1, b"{63f459ea-41fe-4474-9d33-9707c9ee79d1}")]
-        )
+        self.assertEqual(pkt.chunks[0].items, [(1, b"{63f459ea-41fe-4474-9d33-9707c9ee79d1}")])
         self.assertEqual(bytes(pkt), data)
 
     def test_sdes_item_truncated(self) -> None:
@@ -279,9 +273,7 @@ class RtpPacketTest(TestCase):
         self.assertEqual(pkt.sequence_number, 22138)
         self.assertEqual(pkt.timestamp, 3171065731)
         self.assertEqual(pkt.csrc, [])
-        self.assertEqual(
-            pkt.extensions, packet.HeaderExtensions(abs_send_time=15846540)
-        )
+        self.assertEqual(pkt.extensions, packet.HeaderExtensions(abs_send_time=15846540))
         self.assertEqual(len(pkt.payload), 0)
         self.assertEqual(pkt.padding_size, 224)
 
@@ -324,9 +316,7 @@ class RtpPacketTest(TestCase):
 
     def test_with_sdes_mid(self) -> None:
         extensions_map = packet.HeaderExtensionsMap()
-        extensions_map.configure(
-            [(9, "urn:ietf:params:rtp-hdrext:sdes:mid")]
-        )
+        extensions_map.configure([(9, "urn:ietf:params:rtp-hdrext:sdes:mid")])
 
         data = load("rtp_with_sdes_mid.bin")
         pkt = RtpPacket.parse(data, extensions_map)
@@ -353,9 +343,7 @@ class RtpPacketTest(TestCase):
         for length in range(16, 20):
             with self.assertRaises(ValueError) as cm:
                 RtpPacket.parse(data[0:length])
-            self.assertEqual(
-                str(cm.exception), "RTP packet has truncated extension value"
-            )
+            self.assertEqual(str(cm.exception), "RTP packet has truncated extension value")
 
     def test_truncated(self) -> None:
         data = load("rtp.bin")[0:11]
@@ -424,32 +412,24 @@ class RtpUtilTest(TestCase):
         # one-byte, value (truncated)
         with self.assertRaises(ValueError) as cm:
             unpack_header_extensions(0xBEDE, b"\x90")
-        self.assertEqual(
-            str(cm.exception), "RTP one-byte header extension value is truncated"
-        )
+        self.assertEqual(str(cm.exception), "RTP one-byte header extension value is truncated")
 
         # two-byte (truncated)
         with self.assertRaises(ValueError) as cm:
             unpack_header_extensions(0x1000, b"\xff")
-        self.assertEqual(
-            str(cm.exception), "RTP two-byte header extension is truncated"
-        )
+        self.assertEqual(str(cm.exception), "RTP two-byte header extension is truncated")
 
         # two-byte, value (truncated)
         with self.assertRaises(ValueError) as cm:
             unpack_header_extensions(0x1000, b"\xff\x020")
-        self.assertEqual(
-            str(cm.exception), "RTP two-byte header extension value is truncated"
-        )
+        self.assertEqual(str(cm.exception), "RTP two-byte header extension value is truncated")
 
     def test_pack_header_extensions(self) -> None:
         # none
         self.assertEqual(pack_header_extensions([]), (0, b""))
 
         # one-byte, single value
-        self.assertEqual(
-            pack_header_extensions([(9, b"0")]), (0xBEDE, b"\x900\x00\x00")
-        )
+        self.assertEqual(pack_header_extensions([(9, b"0")]), (0xBEDE, b"\x900\x00\x00"))
 
         # one-byte, two values
         self.assertEqual(
@@ -458,9 +438,7 @@ class RtpUtilTest(TestCase):
         )
 
         # two-byte, single value
-        self.assertEqual(
-            pack_header_extensions([(255, b"0")]), (0x1000, b"\xff\x010\x00")
-        )
+        self.assertEqual(pack_header_extensions([(255, b"0")]), (0x1000, b"\xff\x010\x00"))
 
     def test_map_header_extensions(self) -> None:
         data = bytearray(

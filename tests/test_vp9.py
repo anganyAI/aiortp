@@ -113,7 +113,10 @@ class TestParseDescriptorOffset:
         that occurs when both F=1 and P=1.
         """
         payload = _make_vp9_payload(
-            layer=True, flexible=True, keyframe=True, data=b"\xff",
+            layer=True,
+            flexible=True,
+            keyframe=True,
+            data=b"\xff",
         )
         # 1 (mandatory) + 1 (TID/U/SID/D)
         assert _parse_descriptor_offset(payload) == 2
@@ -126,7 +129,11 @@ class TestParseDescriptorOffset:
     def test_with_pid_and_layer_flexible(self) -> None:
         """Uses keyframe=True (P=0) to avoid reference index parsing."""
         payload = _make_vp9_payload(
-            pid=10, layer=True, flexible=True, keyframe=True, data=b"\xff",
+            pid=10,
+            layer=True,
+            flexible=True,
+            keyframe=True,
+            data=b"\xff",
         )
         # 1 (mandatory) + 1 (7-bit PID) + 1 (TID/U/SID/D)
         assert _parse_descriptor_offset(payload) == 3
@@ -141,7 +148,10 @@ class TestVP9DepacketizerSinglePacket:
     def test_single_packet_frame(self) -> None:
         depkt = VP9Depacketizer()
         payload = _make_vp9_payload(
-            start=True, end=True, keyframe=True, data=b"\x01\x02\x03",
+            start=True,
+            end=True,
+            keyframe=True,
+            data=b"\x01\x02\x03",
         )
         result = depkt.feed(payload, marker=True)
         assert len(result) == 1
@@ -152,7 +162,10 @@ class TestVP9DepacketizerSinglePacket:
     def test_inter_frame(self) -> None:
         depkt = VP9Depacketizer()
         payload = _make_vp9_payload(
-            start=True, end=True, keyframe=False, data=b"\xaa",
+            start=True,
+            end=True,
+            keyframe=False,
+            data=b"\xaa",
         )
         result = depkt.feed(payload, marker=True)
         assert len(result) == 1
@@ -180,7 +193,10 @@ class TestVP9DepacketizerFragmented:
         depkt = VP9Depacketizer()
 
         frag1 = _make_vp9_payload(
-            start=True, end=False, keyframe=True, data=b"\x01",
+            start=True,
+            end=False,
+            keyframe=True,
+            data=b"\x01",
         )
         frag2 = _make_vp9_payload(start=False, end=False, data=b"\x02")
         frag3 = _make_vp9_payload(start=False, end=True, data=b"\x03")
@@ -228,7 +244,10 @@ class TestVP9DepacketizerWithPID:
     def test_7bit_pid_stripped(self) -> None:
         depkt = VP9Depacketizer()
         payload = _make_vp9_payload(
-            start=True, end=True, pid=42, data=b"\xde\xad",
+            start=True,
+            end=True,
+            pid=42,
+            data=b"\xde\xad",
         )
         result = depkt.feed(payload, marker=True)
         assert len(result) == 1
@@ -237,7 +256,10 @@ class TestVP9DepacketizerWithPID:
     def test_15bit_pid_stripped(self) -> None:
         depkt = VP9Depacketizer()
         payload = _make_vp9_payload(
-            start=True, end=True, pid=300, data=b"\xbe\xef",
+            start=True,
+            end=True,
+            pid=300,
+            data=b"\xbe\xef",
         )
         result = depkt.feed(payload, marker=True)
         assert len(result) == 1

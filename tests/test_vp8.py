@@ -128,7 +128,11 @@ class TestParseDescriptorOffset:
 
     def test_with_all_fields(self) -> None:
         payload = _make_vp8_payload(
-            start=True, pid=42, tl0picidx=True, tid=True, data=b"\xff",
+            start=True,
+            pid=42,
+            tl0picidx=True,
+            tid=True,
+            data=b"\xff",
         )
         # 1 (mandatory) + 1 (ext) + 1 (PID) + 1 (TL0PICIDX) + 1 (TID)
         assert _parse_descriptor_offset(payload) == 5
@@ -143,7 +147,9 @@ class TestVP8DepacketizerSinglePacket:
     def test_single_packet_frame(self) -> None:
         depkt = VP8Depacketizer()
         payload = _make_vp8_payload(
-            start=True, keyframe=True, data=b"\x01\x02\x03",
+            start=True,
+            keyframe=True,
+            data=b"\x01\x02\x03",
         )
         result = depkt.feed(payload, marker=True)
         assert len(result) == 1
@@ -154,7 +160,9 @@ class TestVP8DepacketizerSinglePacket:
     def test_inter_frame(self) -> None:
         depkt = VP8Depacketizer()
         payload = _make_vp8_payload(
-            start=True, keyframe=False, data=b"\xaa",
+            start=True,
+            keyframe=False,
+            data=b"\xaa",
         )
         result = depkt.feed(payload, marker=True)
         assert len(result) == 1
@@ -222,7 +230,9 @@ class TestVP8DepacketizerWithPID:
     def test_7bit_pid_stripped(self) -> None:
         depkt = VP8Depacketizer()
         payload = _make_vp8_payload(
-            start=True, pid=42, data=b"\xde\xad",
+            start=True,
+            pid=42,
+            data=b"\xde\xad",
         )
         result = depkt.feed(payload, marker=True)
         assert len(result) == 1
@@ -230,7 +240,9 @@ class TestVP8DepacketizerWithPID:
     def test_15bit_pid_stripped(self) -> None:
         depkt = VP8Depacketizer()
         payload = _make_vp8_payload(
-            start=True, pid=300, data=b"\xbe\xef",
+            start=True,
+            pid=300,
+            data=b"\xbe\xef",
         )
         result = depkt.feed(payload, marker=True)
         assert len(result) == 1

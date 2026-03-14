@@ -11,13 +11,10 @@ except ImportError:
 
 
 class OpusCodec(Codec):
-    def __init__(
-        self, sample_rate: int = 48000, channels: int = 1, frame_ms: int = 20
-    ) -> None:
+    def __init__(self, sample_rate: int = 48000, channels: int = 1, frame_ms: int = 20) -> None:
         if not _HAS_OPUS:
             raise ImportError(
-                "opuslib is required for Opus support. "
-                "Install with: pip install aiortp[opus]"
+                "opuslib is required for Opus support. Install with: pip install aiortp[opus]"
             )
         self._sample_rate = sample_rate
         self._channels = channels

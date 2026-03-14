@@ -117,9 +117,7 @@ class RTPSession(BaseRTPSession):
             packet = RtpPacket.parse(data)
         except ValueError:
             header = data[:20].hex() if len(data) >= 20 else data.hex()
-            logger.warning(
-                "Failed to parse RTP packet: len=%d header=%s", len(data), header
-            )
+            logger.warning("Failed to parse RTP packet: len=%d header=%s", len(data), header)
             return
 
         # Check for DTMF
@@ -166,10 +164,7 @@ class RTPSession(BaseRTPSession):
                 self._process_receiver_reports(packet.reports)
             elif isinstance(packet, RtcpRrPacket):
                 self._process_receiver_reports(packet.reports)
-            elif (
-                isinstance(packet, RtcpRtpfbPacket)
-                and packet.fmt == RTCP_RTPFB_NACK
-            ):
+            elif isinstance(packet, RtcpRtpfbPacket) and packet.fmt == RTCP_RTPFB_NACK:
                 self._handle_incoming_nack(packet)
             elif isinstance(packet, RtcpByePacket):
                 logger.info("Received RTCP BYE from %s", packet.sources)
@@ -178,9 +173,7 @@ class RTPSession(BaseRTPSession):
     def _dtmf_receiver(self) -> DtmfReceiver | None:
         if not hasattr(self, "_dtmf_receiver_instance"):
             if self.on_dtmf is not None:
-                self._dtmf_receiver_instance: DtmfReceiver | None = DtmfReceiver(
-                    self.on_dtmf
-                )
+                self._dtmf_receiver_instance: DtmfReceiver | None = DtmfReceiver(self.on_dtmf)
             else:
                 self._dtmf_receiver_instance = None
         return self._dtmf_receiver_instance
@@ -217,9 +210,7 @@ class RTPSession(BaseRTPSession):
         encoded = self._codec.encode(pcm)
         return self.send_audio_auto(encoded)
 
-    def send_dtmf(
-        self, digit: str, duration_ms: int = 160, timestamp: int = 0
-    ) -> None:
+    def send_dtmf(self, digit: str, duration_ms: int = 160, timestamp: int = 0) -> None:
         """Send a DTMF digit."""
         if self._dtmf_sender is None or self._closed:
             return

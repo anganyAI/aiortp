@@ -126,8 +126,11 @@ class DtmfSender:
                 duration=current_duration,
             )
             self._sender.send_raw(
-                self._dtmf_payload_type, ev.serialize(),
-                event_timestamp, marker=0, addr=addr,
+                self._dtmf_payload_type,
+                ev.serialize(),
+                event_timestamp,
+                marker=0,
+                addr=addr,
             )
             current_duration += step_samples
 
@@ -140,6 +143,9 @@ class DtmfSender:
                 duration=duration_samples,
             )
             self._sender.send_raw(
-                self._dtmf_payload_type, ev.serialize(),
-                event_timestamp, marker=1 if i == 0 else 0, addr=addr,
+                self._dtmf_payload_type,
+                ev.serialize(),
+                event_timestamp,
+                marker=1 if i == 0 else 0,
+                addr=addr,
             )

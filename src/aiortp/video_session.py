@@ -109,9 +109,7 @@ class VideoRTPSession(BaseRTPSession):
         self._fps = fps
         self._timestamp_increment = clock_rate // fps
         self._handler = factory()
-        self._jitter_buffer = JitterBuffer(
-            capacity=jitter_capacity, prefetch=0, is_video=True
-        )
+        self._jitter_buffer = JitterBuffer(capacity=jitter_capacity, prefetch=0, is_video=True)
         self._nack_gen = NackGenerator()
 
         # Per-timestamp payload storage: (sequence_number, payload) tuples.
@@ -180,7 +178,8 @@ class VideoRTPSession(BaseRTPSession):
             if self._rtp_packet_count <= 5:
                 logger.info(
                     "Ignoring video RTP pt=%d (expected %d), seq=%d",
-                    packet.payload_type, self._payload_type,
+                    packet.payload_type,
+                    self._payload_type,
                     packet.sequence_number,
                 )
             return
@@ -190,8 +189,10 @@ class VideoRTPSession(BaseRTPSession):
             self._remote_ssrc = packet.ssrc
             logger.info(
                 "First video RTP packet: ssrc=%d, pt=%d, seq=%d, len=%d",
-                packet.ssrc, packet.payload_type,
-                packet.sequence_number, len(packet.payload),
+                packet.ssrc,
+                packet.payload_type,
+                packet.sequence_number,
+                len(packet.payload),
             )
 
         # Stream statistics
@@ -207,9 +208,7 @@ class VideoRTPSession(BaseRTPSession):
         ts = packet.timestamp
         if ts not in self._pending_payloads:
             self._pending_payloads[ts] = []
-        self._pending_payloads[ts].append(
-            (packet.sequence_number, packet.payload)
-        )
+        self._pending_payloads[ts].append((packet.sequence_number, packet.payload))
         self._evict_old_payloads()
 
         # Jitter buffer handles reordering and frame boundary detection
@@ -224,8 +223,7 @@ class VideoRTPSession(BaseRTPSession):
             if frame is not None:
                 keep = frame.timestamp
                 self._pending_payloads = {
-                    t: v for t, v in self._pending_payloads.items()
-                    if t == keep
+                    t: v for t, v in self._pending_payloads.items() if t == keep
                 }
             else:
                 self._pending_payloads.clear()
@@ -294,7 +292,8 @@ class VideoRTPSession(BaseRTPSession):
 
         for packet in packets:
             if isinstance(packet, RtcpPsfbPacket) and packet.fmt in (
-                RTCP_PSFB_PLI, RTCP_PSFB_FIR,
+                RTCP_PSFB_PLI,
+                RTCP_PSFB_FIR,
             ):
                 if self.on_keyframe_needed is not None:
                     self.on_keyframe_needed()
@@ -303,19 +302,14 @@ class VideoRTPSession(BaseRTPSession):
                 self._process_receiver_reports(packet.reports)
             elif isinstance(packet, RtcpRrPacket):
                 self._process_receiver_reports(packet.reports)
-            elif (
-                isinstance(packet, RtcpRtpfbPacket)
-                and packet.fmt == RTCP_RTPFB_NACK
-            ):
+            elif isinstance(packet, RtcpRtpfbPacket) and packet.fmt == RTCP_RTPFB_NACK:
                 self._handle_incoming_nack(packet)
             elif isinstance(packet, RtcpByePacket):
                 logger.info("Video: received RTCP BYE from %s", packet.sources)
 
     # ── Outbound ─────────────────────────────────────────────
 
-    def send_frame(
-        self, nal_units: list[bytes], timestamp: int, keyframe: bool = False
-    ) -> None:
+    def send_frame(self, nal_units: list[bytes], timestamp: int, keyframe: bool = False) -> None:
         """Packetize and send video data as RTP packets.
 
         Args:
@@ -344,13 +338,16 @@ class VideoRTPSession(BaseRTPSession):
         for i, (payload, _) in enumerate(all_packets):
             is_last = i == len(all_packets) - 1
             self._sender.send_frame(
-                payload, timestamp,
+                payload,
+                timestamp,
                 marker=1 if is_last else 0,
                 addr=self._remote_addr,
             )
 
     def send_frame_auto(
-        self, nal_units: list[bytes], keyframe: bool = False,
+        self,
+        nal_units: list[bytes],
+        keyframe: bool = False,
     ) -> int:
         """Packetize and send video with auto-incrementing timestamp.
 
@@ -383,11 +380,7 @@ class VideoRTPSession(BaseRTPSession):
 
     def _send_nack(self) -> None:
         """Send RTCP NACK for missing packets."""
-        if (
-            self._rtcp_transport is None
-            or self._remote_ssrc is None
-            or not self._nack_gen.missing
-        ):
+        if self._rtcp_transport is None or self._remote_ssrc is None or not self._nack_gen.missing:
             return
         nack = RtcpRtpfbPacket(
             fmt=RTCP_RTPFB_NACK,
@@ -406,5 +399,6 @@ class VideoRTPSession(BaseRTPSession):
             received = self._stream_stats.packets_received
         logger.info(
             "Video RTP session closing: udp_packets=%d, rtp_matched=%d",
-            self._rtp_packet_count, received,
+            self._rtp_packet_count,
+            received,
         )

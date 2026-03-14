@@ -50,7 +50,7 @@ class TestDepacketizerSingleNal:
 
     def test_single_nal_idr(self) -> None:
         depkt = H264Depacketizer()
-        nal = bytes([0x65]) + b"\xAB" * 50
+        nal = bytes([0x65]) + b"\xab" * 50
         result = depkt.feed(nal, marker=True)
         assert result == [nal]
 
@@ -226,7 +226,7 @@ class TestPacketizerFuA:
         """NAL larger than MTU fragmented into FU-A packets."""
         pkt = H264Packetizer()
         nal_header = 0x65  # NRI=3, type=5 (IDR)
-        nal = bytes([nal_header]) + b"\xAB" * 200
+        nal = bytes([nal_header]) + b"\xab" * 200
         result = pkt.packetize(nal, mtu=100)
 
         # 200 bytes of data (after NAL header) with 98 bytes per fragment = 3 fragments
@@ -258,7 +258,7 @@ class TestPacketizerFuA:
         """Every FU-A fragment respects the MTU limit."""
         pkt = H264Packetizer()
         mtu = 50
-        nal = bytes([0x41]) + b"\xFF" * 300
+        nal = bytes([0x41]) + b"\xff" * 300
         result = pkt.packetize(nal, mtu=mtu)
 
         for payload, _ in result:
@@ -285,7 +285,7 @@ class TestRoundtrip:
 
     def test_fu_a_roundtrip(self) -> None:
         """Packetize → depacketize for a large NAL using FU-A."""
-        original = bytes([0x65]) + b"\xAB" * 500
+        original = bytes([0x65]) + b"\xab" * 500
 
         pkt = H264Packetizer()
         depkt = H264Depacketizer()

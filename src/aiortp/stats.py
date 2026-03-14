@@ -66,9 +66,7 @@ class StreamStatistics:
         self._received_prior = 0
 
     def add(self, packet: RtpPacket) -> None:
-        in_order = self.max_seq is None or uint16_gt(
-            packet.sequence_number, self.max_seq
-        )
+        in_order = self.max_seq is None or uint16_gt(packet.sequence_number, self.max_seq)
         self.packets_received += 1
 
         if self.base_seq is None:

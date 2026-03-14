@@ -147,7 +147,10 @@ class VP8Packetizer:
     """Fragment VP8 frames into RTP-sized payloads (RFC 7741)."""
 
     def packetize(
-        self, frame: bytes, mtu: int = 1400, keyframe: bool = False,
+        self,
+        frame: bytes,
+        mtu: int = 1400,
+        keyframe: bool = False,
     ) -> list[tuple[bytes, bool]]:
         """Split a VP8 frame into MTU-sized RTP payloads.
 

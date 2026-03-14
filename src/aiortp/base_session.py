@@ -206,17 +206,13 @@ class BaseRTPSession:
                 ),
                 reports=[rr_block] if rr_block else [],
             )
-            self._rtcp_transport.send(
-                bytes(sr) + bytes(sdes), self._remote_rtcp_addr
-            )
+            self._rtcp_transport.send(bytes(sr) + bytes(sdes), self._remote_rtcp_addr)
         elif rr_block is not None:
             rr = RtcpRrPacket(
                 ssrc=self._ssrc,
                 reports=[rr_block],
             )
-            self._rtcp_transport.send(
-                bytes(rr) + bytes(sdes), self._remote_rtcp_addr
-            )
+            self._rtcp_transport.send(bytes(rr) + bytes(sdes), self._remote_rtcp_addr)
 
     def _build_receiver_report(self) -> RtcpReceiverInfo | None:
         """Build a receiver report block from stream statistics."""

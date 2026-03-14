@@ -5,9 +5,7 @@ from aiortp.packet import RtpPacket
 
 
 class JitterBufferTest(TestCase):
-    def assertPackets(
-        self, jbuffer: JitterBuffer, expected: list[int | None]
-    ) -> None:
+    def assertPackets(self, jbuffer: JitterBuffer, expected: list[int | None]) -> None:
         found = [x.sequence_number if x else None for x in jbuffer._packets]
         self.assertEqual(found, expected)
 
@@ -221,36 +219,24 @@ class JitterBufferTest(TestCase):
         """Audio jitter buffer."""
         jbuffer = JitterBuffer(capacity=16, prefetch=4)
 
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=0, timestamp=1234, payload=b"0000")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=0, timestamp=1234, payload=b"0000"))
         self.assertIsNone(frame)
 
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=1, timestamp=1235, payload=b"0001")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=1, timestamp=1235, payload=b"0001"))
         self.assertIsNone(frame)
 
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=2, timestamp=1236, payload=b"0002")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=2, timestamp=1236, payload=b"0002"))
         self.assertIsNone(frame)
 
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=3, timestamp=1237, payload=b"0003")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=3, timestamp=1237, payload=b"0003"))
         self.assertIsNone(frame)
 
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=4, timestamp=1238, payload=b"0003")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=4, timestamp=1238, payload=b"0003"))
         self.assertIsNotNone(frame)
         self.assertEqual(frame.data, b"0000")
         self.assertEqual(frame.timestamp, 1234)
 
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=5, timestamp=1239, payload=b"0004")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=5, timestamp=1239, payload=b"0004"))
         self.assertIsNotNone(frame)
         self.assertEqual(frame.data, b"0001")
         self.assertEqual(frame.timestamp, 1235)
@@ -259,14 +245,10 @@ class JitterBufferTest(TestCase):
         """Video frame delivered on marker bit (last packet of frame)."""
         jbuffer = JitterBuffer(capacity=128, is_video=True)
 
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=0, timestamp=1234, payload=b"0000")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=0, timestamp=1234, payload=b"0000"))
         self.assertIsNone(frame)
 
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=1, timestamp=1234, payload=b"0001")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=1, timestamp=1234, payload=b"0001"))
         self.assertIsNone(frame)
 
         # marker=1 signals end of frame — delivers immediately
@@ -292,9 +274,7 @@ class JitterBufferTest(TestCase):
         """Video frame not delivered if there's a gap before the marker."""
         jbuffer = JitterBuffer(capacity=128, is_video=True)
 
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=0, timestamp=1234, payload=b"P0")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=0, timestamp=1234, payload=b"P0"))
         self.assertIsNone(frame)
 
         # Packet 2 arrives out of order (gap at seq=1)
@@ -304,9 +284,7 @@ class JitterBufferTest(TestCase):
         self.assertIsNone(frame)  # can't deliver — gap at seq=1
 
         # Packet 1 fills the gap — frame now complete
-        pli_flag, frame = jbuffer.add(
-            RtpPacket(sequence_number=1, timestamp=1234, payload=b"P1")
-        )
+        pli_flag, frame = jbuffer.add(RtpPacket(sequence_number=1, timestamp=1234, payload=b"P1"))
         self.assertIsNotNone(frame)
         self.assertEqual(frame.data, b"P0P1P2")
         self.assertEqual(frame.timestamp, 1234)

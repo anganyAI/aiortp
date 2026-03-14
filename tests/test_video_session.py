@@ -17,9 +17,7 @@ _Pair = tuple[VideoRTPSession, VideoRTPSession]
 
 
 @pytest.fixture
-async def loopback_pair() -> (
-    _Pair
-):
+async def loopback_pair() -> _Pair:
     """Create two video sessions wired to each other."""
     session_a = await VideoRTPSession.create(
         local_addr=("127.0.0.1", 0),
@@ -78,7 +76,7 @@ class TestVideoSessionSendReceive:
         receiver.on_frame = on_frame
 
         # Send IDR NAL (type 5)
-        idr = bytes([0x65]) + b"\xAB" * 10
+        idr = bytes([0x65]) + b"\xab" * 10
         sender.send_frame([idr], timestamp=90000)
 
         await asyncio.wait_for(event.wait(), timeout=2.0)
@@ -224,7 +222,8 @@ class TestVideoSessionClose:
 
 class TestVideoSessionAutoTimestamp:
     async def test_send_frame_auto_increments_timestamp(
-        self, loopback_pair: _Pair,
+        self,
+        loopback_pair: _Pair,
     ) -> None:
         """Auto-timestamp increments by clock_rate/fps (3000 at 30fps)."""
         sender, receiver = loopback_pair

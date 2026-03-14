@@ -162,9 +162,7 @@ class H264Packetizer:
         # FU-A fragmentation
         return self._fragment_fu_a(nal_unit, mtu)
 
-    def _fragment_fu_a(
-        self, nal_unit: bytes, mtu: int
-    ) -> list[tuple[bytes, bool]]:
+    def _fragment_fu_a(self, nal_unit: bytes, mtu: int) -> list[tuple[bytes, bool]]:
         """Fragment a NAL unit using FU-A (type 28)."""
         nal_header = nal_unit[0]
         nal_type = nal_header & _NAL_TYPE_MASK

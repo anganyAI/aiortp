@@ -1,4 +1,3 @@
-
 from .packet import RtpPacket
 from .utils import uint16_add
 
@@ -117,7 +116,9 @@ class JitterBuffer:
         return None
 
     def _has_newer_video_frame_after(
-        self, gap_offset: int, current_ts: int | None,
+        self,
+        gap_offset: int,
+        current_ts: int | None,
     ) -> bool:
         """Check if a packet from a *different* frame exists after the gap.
 
@@ -193,9 +194,7 @@ class JitterBuffer:
 
         return None
 
-    def _has_later_packet(
-        self, gap_offset: int, current_timestamp: int | None = None
-    ) -> bool:
+    def _has_later_packet(self, gap_offset: int, current_timestamp: int | None = None) -> bool:
         """Check if a received packet with a *different* timestamp exists after the gap.
 
         This prevents same-timestamp packets (e.g. video fragments) from
