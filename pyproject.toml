@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aiortp"
-version = "0.2.0"
-description = "Asyncio RTP/RTCP audio library for Python"
+version = "0.3.0"
+description = "Asyncio RTP/RTCP audio and video library for Python"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
     { name = "Sylvain Boily", email = "sylvainboilydroid@gmail.com" },
 ]
-keywords = ["rtp", "rtcp", "audio", "asyncio", "voip", "sip", "g711", "dtmf", "telephony"]
+keywords = ["rtp", "rtcp", "audio", "video", "asyncio", "voip", "sip", "g711", "h264", "vp9", "dtmf", "telephony"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: AsyncIO",
@@ -25,6 +25,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Communications :: Telephony",
     "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
     "Typing :: Typed",
 ]
 
