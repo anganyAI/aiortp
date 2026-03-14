@@ -6,6 +6,7 @@ from typing import Optional
 
 from .base_session import BaseRTPSession
 from .codecs import Codec, get_codec
+from .port_allocator import PortAllocator
 from .dtmf import DtmfReceiver, DtmfSender
 from .jitterbuffer import JitterBuffer
 from .packet import (
@@ -32,6 +33,7 @@ class RTPSession(BaseRTPSession):
         jitter_capacity: int = 16,
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
+        port_allocator: Optional[PortAllocator] = None,
     ) -> None:
         super().__init__(
             payload_type=payload_type,
@@ -39,6 +41,7 @@ class RTPSession(BaseRTPSession):
             clock_rate=clock_rate,
             cname=cname,
             rtcp_interval=rtcp_interval,
+            port_allocator=port_allocator,
         )
         self._codec = codec
         self._dtmf_payload_type = dtmf_payload_type
@@ -76,6 +79,7 @@ class RTPSession(BaseRTPSession):
         jitter_capacity: int = 16,
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
+        port_allocator: Optional[PortAllocator] = None,
     ) -> "RTPSession":
         """Async factory to create and bind an RTP session."""
         if codec is None:
@@ -92,6 +96,7 @@ class RTPSession(BaseRTPSession):
             jitter_capacity=jitter_capacity,
             jitter_prefetch=jitter_prefetch,
             skip_audio_gaps=skip_audio_gaps,
+            port_allocator=port_allocator,
         )
         await session._bind_transports(local_addr, remote_addr)
 
@@ -101,6 +106,10 @@ class RTPSession(BaseRTPSession):
             dtmf_payload_type=dtmf_payload_type,
             clock_rate=clock_rate,
         )
+
+        # Configure auto-timestamp from codec
+        if session._codec is not None and session._sender is not None:
+            session._sender.timestamp_increment = session._codec.samples_per_frame
 
         return session
 
@@ -173,12 +182,31 @@ class RTPSession(BaseRTPSession):
             return
         self._sender.send_frame(payload, timestamp, addr=self._remote_addr)
 
+    def send_audio_auto(self, payload: bytes) -> int:
+        """Send encoded audio with auto-incrementing timestamp.
+
+        Returns the RTP timestamp used.
+        """
+        if self._sender is None or self._closed:
+            return 0
+        return self._sender.send_frame_auto(payload, addr=self._remote_addr)
+
     def send_audio_pcm(self, pcm: bytes, timestamp: int) -> None:
         """Send raw PCM audio, encoding with session codec."""
         if self._codec is None:
             raise RuntimeError("No codec configured for PCM encoding")
         encoded = self._codec.encode(pcm)
         self.send_audio(encoded, timestamp)
+
+    def send_audio_pcm_auto(self, pcm: bytes) -> int:
+        """Encode and send PCM audio with auto-incrementing timestamp.
+
+        Returns the RTP timestamp used.
+        """
+        if self._codec is None:
+            raise RuntimeError("No codec configured for PCM encoding")
+        encoded = self._codec.encode(pcm)
+        return self.send_audio_auto(encoded)
 
     def send_dtmf(
         self, digit: str, duration_ms: int = 160, timestamp: int = 0

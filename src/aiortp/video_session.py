@@ -1,12 +1,15 @@
 """VideoRTPSession — RTP session for video with codec-aware depacketization.
 
-Supports H.264 (RFC 6184) and VP9 (RFC 9628) with RTCP feedback.
+Supports H.264 (RFC 6184), VP8 (RFC 7741), and VP9 (RFC 9628)
+with RTCP feedback.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from .base_session import BaseRTPSession
 from .h264 import H264Depacketizer, H264Packetizer, is_keyframe_nal
@@ -20,19 +23,50 @@ from .packet import (
     RtcpRtpfbPacket,
     RtpPacket,
 )
+from .port_allocator import PortAllocator
 from .stats import NackGenerator, StreamStatistics
+from .vp8 import VP8Depacketizer, VP8Packetizer
 from .vp9 import VP9Depacketizer, VP9Packetizer
 
 logger = logging.getLogger(__name__)
-
-# Supported video codecs
-SUPPORTED_VIDEO_CODECS = frozenset({"h264", "vp9"})
 
 # Default video jitter buffer capacity (must be power of 2)
 _VIDEO_JITTER_CAPACITY = 128
 
 # Limit pending timestamps to prevent unbounded memory growth
 _MAX_PENDING_TIMESTAMPS = 32
+
+
+@dataclass
+class _VideoCodecHandler:
+    """Bundle of codec-specific components for a video codec."""
+
+    depacketizer: Any  # has .feed(payload, marker) and .reset()
+    packetizer: Any  # has .packetize(frame, ...)
+    # True for H.264 (feed returns list[bytes], keyframe checked per NAL).
+    # False for VP8/VP9 (feed returns list[tuple[bytes, bool]]).
+    nal_mode: bool
+
+
+def _make_h264() -> _VideoCodecHandler:
+    return _VideoCodecHandler(H264Depacketizer(), H264Packetizer(), nal_mode=True)
+
+
+def _make_vp8() -> _VideoCodecHandler:
+    return _VideoCodecHandler(VP8Depacketizer(), VP8Packetizer(), nal_mode=False)
+
+
+def _make_vp9() -> _VideoCodecHandler:
+    return _VideoCodecHandler(VP9Depacketizer(), VP9Packetizer(), nal_mode=False)
+
+
+_CODEC_FACTORIES: dict[str, Callable[[], _VideoCodecHandler]] = {
+    "h264": _make_h264,
+    "vp8": _make_vp8,
+    "vp9": _make_vp9,
+}
+
+SUPPORTED_VIDEO_CODECS = frozenset(_CODEC_FACTORIES)
 
 
 class VideoRTPSession(BaseRTPSession):
@@ -51,8 +85,11 @@ class VideoRTPSession(BaseRTPSession):
         rtcp_interval: float = 5.0,
         jitter_capacity: int = _VIDEO_JITTER_CAPACITY,
         codec: str = "h264",
+        port_allocator: PortAllocator | None = None,
+        fps: int = 30,
     ) -> None:
-        if codec not in SUPPORTED_VIDEO_CODECS:
+        factory = _CODEC_FACTORIES.get(codec)
+        if factory is None:
             raise ValueError(
                 f"Unsupported video codec {codec!r}, "
                 f"must be one of {sorted(SUPPORTED_VIDEO_CODECS)}"
@@ -63,28 +100,20 @@ class VideoRTPSession(BaseRTPSession):
             clock_rate=clock_rate,
             cname=cname,
             rtcp_interval=rtcp_interval,
+            port_allocator=port_allocator,
         )
         self._codec = codec
+        self._fps = fps
+        self._timestamp_increment = clock_rate // fps
+        self._handler = factory()
         self._jitter_buffer = JitterBuffer(
             capacity=jitter_capacity, prefetch=0, is_video=True
         )
         self._nack_gen = NackGenerator()
 
-        # Codec-specific depacketizer/packetizer
-        if codec == "vp9":
-            self._vp9_depacketizer = VP9Depacketizer()
-            self._vp9_packetizer = VP9Packetizer()
-            self._h264_depacketizer: H264Depacketizer | None = None
-            self._h264_packetizer: H264Packetizer | None = None
-        else:
-            self._h264_depacketizer = H264Depacketizer()
-            self._h264_packetizer = H264Packetizer()
-            self._vp9_depacketizer: VP9Depacketizer | None = None
-            self._vp9_packetizer: VP9Packetizer | None = None
-
         # Per-timestamp payload storage: (sequence_number, payload) tuples.
         # Sorted by sequence number before depacketization to ensure
-        # correct FU-A fragment ordering regardless of arrival order.
+        # correct fragment ordering regardless of arrival order.
         self._pending_payloads: dict[int, list[tuple[int, bytes]]] = {}
 
         # Remote SSRC (learned from first inbound packet)
@@ -113,6 +142,8 @@ class VideoRTPSession(BaseRTPSession):
         rtcp_interval: float = 5.0,
         jitter_capacity: int = _VIDEO_JITTER_CAPACITY,
         codec: str = "h264",
+        port_allocator: PortAllocator | None = None,
+        fps: int = 30,
     ) -> VideoRTPSession:
         """Async factory to create and bind a video RTP session."""
         session = cls(
@@ -123,8 +154,12 @@ class VideoRTPSession(BaseRTPSession):
             rtcp_interval=rtcp_interval,
             jitter_capacity=jitter_capacity,
             codec=codec,
+            port_allocator=port_allocator,
+            fps=fps,
         )
         await session._bind_transports(local_addr, remote_addr)
+        if session._sender is not None:
+            session._sender.timestamp_increment = session._timestamp_increment
         return session
 
     # ── Inbound ──────────────────────────────────────────────
@@ -182,7 +217,7 @@ class VideoRTPSession(BaseRTPSession):
 
         if pli_flag:
             self._send_pli()
-            self._reset_depacketizer()
+            self._handler.depacketizer.reset()
             self._awaiting_keyframe = True
             # Keep payloads for the frame being delivered (if any);
             # clear stale timestamps that were dropped by the jitter buffer.
@@ -206,13 +241,6 @@ class VideoRTPSession(BaseRTPSession):
         for ts in sorted_ts[:-_MAX_PENDING_TIMESTAMPS]:
             del self._pending_payloads[ts]
 
-    def _reset_depacketizer(self) -> None:
-        """Reset the active depacketizer."""
-        if self._h264_depacketizer is not None:
-            self._h264_depacketizer.reset()
-        if self._vp9_depacketizer is not None:
-            self._vp9_depacketizer.reset()
-
     def _deliver_frame(self, timestamp: int) -> None:
         """Depacketize stored payloads for a completed frame and deliver."""
         entries = self._pending_payloads.pop(timestamp, [])
@@ -222,17 +250,17 @@ class VideoRTPSession(BaseRTPSession):
         entries.sort(key=lambda e: e[0])
         payloads = [payload for _, payload in entries]
 
-        if self._codec == "vp9":
-            self._deliver_vp9(payloads, timestamp)
+        if self._handler.nal_mode:
+            self._deliver_nal_mode(payloads, timestamp)
         else:
-            self._deliver_h264(payloads, timestamp)
+            self._deliver_frame_mode(payloads, timestamp)
 
-    def _deliver_h264(self, payloads: list[bytes], timestamp: int) -> None:
-        """Depacketize H.264 NAL units and deliver."""
-        assert self._h264_depacketizer is not None
+    def _deliver_nal_mode(self, payloads: list[bytes], timestamp: int) -> None:
+        """Deliver H.264 NAL units (feed returns list[bytes])."""
+        depkt = self._handler.depacketizer
         for i, payload in enumerate(payloads):
             is_last = i == len(payloads) - 1
-            nals = self._h264_depacketizer.feed(payload, marker=is_last)
+            nals = depkt.feed(payload, marker=is_last)
             for nal in nals:
                 is_key = is_keyframe_nal(nal)
                 if self._awaiting_keyframe:
@@ -242,12 +270,12 @@ class VideoRTPSession(BaseRTPSession):
                         continue
                 self.on_frame(nal, timestamp, is_key)  # type: ignore[misc]
 
-    def _deliver_vp9(self, payloads: list[bytes], timestamp: int) -> None:
-        """Depacketize VP9 frame data and deliver."""
-        assert self._vp9_depacketizer is not None
+    def _deliver_frame_mode(self, payloads: list[bytes], timestamp: int) -> None:
+        """Deliver VP8/VP9 frames (feed returns list[tuple[bytes, bool]])."""
+        depkt = self._handler.depacketizer
         for i, payload in enumerate(payloads):
             is_last = i == len(payloads) - 1
-            frames = self._vp9_depacketizer.feed(payload, marker=is_last)
+            frames = depkt.feed(payload, marker=is_last)
             for frame_data, is_keyframe in frames:
                 if self._awaiting_keyframe:
                     if is_keyframe:
@@ -279,7 +307,7 @@ class VideoRTPSession(BaseRTPSession):
         """Packetize and send video data as RTP packets.
 
         Args:
-            nal_units: For H.264: list of NAL units. For VP9: list of
+            nal_units: For H.264: list of NAL units. For VP8/VP9: list of
                 complete frame bitstreams (typically one per call).
             timestamp: RTP timestamp (90kHz clock).
             keyframe: Whether this is a keyframe.
@@ -287,16 +315,15 @@ class VideoRTPSession(BaseRTPSession):
         if self._sender is None or self._closed:
             return
 
+        packetizer = self._handler.packetizer
         all_packets: list[tuple[bytes, bool]] = []
 
-        if self._codec == "vp9" and self._vp9_packetizer is not None:
-            for frame in nal_units:
-                all_packets.extend(
-                    self._vp9_packetizer.packetize(frame, keyframe=keyframe)
-                )
-        elif self._h264_packetizer is not None:
+        if self._handler.nal_mode:
             for nal in nal_units:
-                all_packets.extend(self._h264_packetizer.packetize(nal))
+                all_packets.extend(packetizer.packetize(nal))
+        else:
+            for frame in nal_units:
+                all_packets.extend(packetizer.packetize(frame, keyframe=keyframe))
 
         if not all_packets:
             return
@@ -309,6 +336,20 @@ class VideoRTPSession(BaseRTPSession):
                 marker=1 if is_last else 0,
                 addr=self._remote_addr,
             )
+
+    def send_frame_auto(
+        self, nal_units: list[bytes], keyframe: bool = False,
+    ) -> int:
+        """Packetize and send video with auto-incrementing timestamp.
+
+        Returns the RTP timestamp used for this frame.
+        """
+        if self._sender is None or self._closed:
+            return 0
+        ts = self._sender.current_timestamp
+        self.send_frame(nal_units, ts, keyframe)
+        self._sender.advance_timestamp()
+        return ts
 
     # ── RTCP feedback ────────────────────────────────────────
 

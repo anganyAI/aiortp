@@ -19,6 +19,7 @@ from .packet import (
     RtcpSourceInfo,
     RtcpSrPacket,
 )
+from .port_allocator import PortAllocator
 from .sender import RtpSender
 from .stats import StreamStatistics
 from .transport import RtpTransport
@@ -41,12 +42,14 @@ class BaseRTPSession:
         clock_rate: int = 8000,
         cname: str = "aiortp",
         rtcp_interval: float = 5.0,
+        port_allocator: PortAllocator | None = None,
     ) -> None:
         self._payload_type = payload_type
         self._ssrc = ssrc if ssrc is not None else random32()
         self._clock_rate = clock_rate
         self._cname = cname
         self._rtcp_interval = rtcp_interval
+        self._port_allocator = port_allocator
 
         # Transport
         self._rtp_transport: RtpTransport | None = None
@@ -62,6 +65,9 @@ class BaseRTPSession:
 
         # RTCP
         self._rtcp_task: asyncio.Task[None] | None = None
+
+        # Port tracking for allocator release on close
+        self._allocated_rtp_port: int | None = None
 
         # State
         self._closed = False
@@ -84,6 +90,16 @@ class BaseRTPSession:
         self._remote_addr = remote_addr
         self._remote_rtcp_addr = self._compute_rtcp_addr(remote_addr)
 
+        # Determine local addresses
+        if self._port_allocator is not None:
+            rtp_port, rtcp_port = await self._port_allocator.allocate()
+            self._allocated_rtp_port = rtp_port
+            rtp_local = (local_addr[0], rtp_port)
+            rtcp_local = (local_addr[0], rtcp_port)
+        else:
+            rtp_local = local_addr
+            rtcp_local = None  # computed after RTP bind
+
         # RTP transport
         rtp_transport_obj = RtpTransport(
             on_rtp=self._handle_rtp,
@@ -91,16 +107,17 @@ class BaseRTPSession:
         )
         await self._loop.create_datagram_endpoint(
             lambda: rtp_transport_obj,
-            local_addr=local_addr,
+            local_addr=rtp_local,
         )
         self._rtp_transport = rtp_transport_obj
 
-        # RTCP transport — port adjacent to RTP, or OS-assigned
-        rtp_bound = rtp_transport_obj._transport.get_extra_info("sockname")  # type: ignore[union-attr]
-        if local_addr[1] == 0:
-            rtcp_local = (local_addr[0], 0)
-        else:
-            rtcp_local = (local_addr[0], rtp_bound[1] + 1)
+        # RTCP transport — use allocator port, adjacent port, or OS-assigned
+        if rtcp_local is None:
+            rtp_bound = rtp_transport_obj._transport.get_extra_info("sockname")  # type: ignore[union-attr]
+            if local_addr[1] == 0:
+                rtcp_local = (local_addr[0], 0)
+            else:
+                rtcp_local = (local_addr[0], rtp_bound[1] + 1)
 
         rtcp_transport_obj = RtpTransport(
             on_rtp=self._handle_rtp,
@@ -215,6 +232,9 @@ class BaseRTPSession:
             self._rtp_transport.close()
         if self._rtcp_transport is not None:
             self._rtcp_transport.close()
+
+        if self._port_allocator is not None and self._allocated_rtp_port is not None:
+            await self._port_allocator.release(self._allocated_rtp_port)
 
     # ── Abstract ──────────────────────────────────────────────
 

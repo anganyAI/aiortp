@@ -129,15 +129,14 @@ class DtmfSenderTest(TestCase):
         sender = RtpSender(transport=transport, payload_type=0, ssrc=12345)
         dtmf_sender = DtmfSender(sender=sender, dtmf_payload_type=101)
 
-        packets = dtmf_sender.send_digit("1", duration_ms=160)
+        dtmf_sender.send_digit("1", duration_ms=160)
 
         # Should have progress packets + 3 end packets
-        # 160ms / 20ms = 8 steps, but progress packets are for durations < total
-        # So we get 7 progress packets (at 160, 320, ..., 1120) + 3 end packets = 10
-        self.assertTrue(len(packets) >= 3)  # At least the 3 end packets
+        self.assertTrue(len(sent_data) >= 3)  # At least the 3 end packets
+        self.assertEqual(sender.packets_sent, len(sent_data))
 
         # Verify last 3 packets are end packets
-        for pkt_data in packets[-3:]:
+        for pkt_data in sent_data[-3:]:
             pkt = RtpPacket.parse(pkt_data)
             ev = DtmfEvent.parse(pkt.payload)
             self.assertTrue(ev.end)

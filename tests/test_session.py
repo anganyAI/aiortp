@@ -109,3 +109,21 @@ async def test_rtcp_bye_on_close() -> None:
     await asyncio.sleep(0.1)
 
     await session_b.close()
+
+
+@pytest.mark.asyncio
+async def test_send_audio_auto_increments_timestamp() -> None:
+    """Auto-timestamp increments by samples_per_frame."""
+    session = await RTPSession.create(
+        local_addr=("127.0.0.1", 0),
+        remote_addr=("127.0.0.1", 19999),
+        payload_type=0,  # PCMU: 160 samples/frame
+        rtcp_interval=60.0,
+    )
+
+    ts1 = session.send_audio_auto(b"\x00" * 160)
+    ts2 = session.send_audio_auto(b"\x00" * 160)
+    assert ts2 == (ts1 + 160) & 0xFFFFFFFF
+    assert session.stats["packets_sent"] == 2
+
+    await session.close()

@@ -15,6 +15,7 @@ class PayloadType(IntEnum):
 
     # Dynamic payload types (video, standard SIP conventions)
     H264 = 96
+    VP8 = 97
     VP9 = 98
 
 

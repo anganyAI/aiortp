@@ -195,3 +195,17 @@ class TestVideoSessionClose:
         await session.close()
         # Should not raise
         session.send_frame([bytes([0x41])], timestamp=90000)
+
+
+class TestVideoSessionAutoTimestamp:
+    async def test_send_frame_auto_increments_timestamp(
+        self, loopback_pair: tuple[VideoRTPSession, VideoRTPSession],
+    ) -> None:
+        """Auto-timestamp increments by clock_rate/fps (3000 at 30fps)."""
+        sender, receiver = loopback_pair
+        nal = bytes([0x41]) + b"\x00" * 10
+
+        ts1 = sender.send_frame_auto([nal])
+        ts2 = sender.send_frame_auto([nal])
+        assert ts2 == (ts1 + 3000) & 0xFFFFFFFF  # 90000 / 30
+        assert sender.stats["packets_sent"] == 2

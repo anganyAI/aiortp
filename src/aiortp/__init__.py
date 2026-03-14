@@ -16,8 +16,10 @@ from .packet import (
     is_rtcp,
 )
 from .h264 import H264Depacketizer, H264Packetizer, is_keyframe_nal
+from .port_allocator import PortAllocator
 from .session import RTPSession
 from .stats import NackGenerator, StreamStatistics
+from .vp8 import VP8Depacketizer, VP8Packetizer, is_keyframe_vp8
 from .transport import RtpTransport
 from .video_session import SUPPORTED_VIDEO_CODECS, VideoRTPSession
 from .vp9 import VP9Depacketizer, VP9Packetizer, is_keyframe_vp9
@@ -35,6 +37,7 @@ __all__ = [
     "JitterFrame",
     "NackGenerator",
     "PayloadType",
+    "PortAllocator",
     "RtcpByePacket",
     "RtcpPacket",
     "RtcpRrPacket",
@@ -46,9 +49,12 @@ __all__ = [
     "SUPPORTED_VIDEO_CODECS",
     "StreamStatistics",
     "VideoRTPSession",
+    "VP8Depacketizer",
+    "VP8Packetizer",
     "VP9Depacketizer",
     "VP9Packetizer",
     "get_codec",
+    "is_keyframe_vp8",
     "is_keyframe_vp9",
     "is_keyframe_nal",
     "is_rtcp",

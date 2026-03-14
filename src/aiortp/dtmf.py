@@ -7,7 +7,6 @@ from typing import Optional
 
 from .packet import RtpPacket
 from .sender import RtpSender
-from .utils import uint16_add
 
 # DTMF digit to event code mapping
 DTMF_EVENTS: dict[str, int] = {
@@ -102,12 +101,11 @@ class DtmfSender:
         volume: int = 10,
         timestamp: int = 0,
         addr: tuple[str, int] | None = None,
-    ) -> list[bytes]:
-        """
-        Generate DTMF packets for a digit.
-        Returns list of serialized packets (for testing).
+    ) -> None:
+        """Generate and send DTMF packets for a digit.
 
-        Sends progress packets every 20ms, then 3 redundant end packets.
+        Sends progress packets every 20ms, then 3 redundant end packets
+        (RFC 4733 Section 2.5.1.4).
         """
         event_code = DTMF_EVENTS.get(digit.upper())
         if event_code is None:
@@ -119,8 +117,6 @@ class DtmfSender:
         # All packets for this event share the same RTP timestamp
         event_timestamp = timestamp
 
-        packets: list[bytes] = []
-
         # Progress packets
         current_duration = step_samples
         while current_duration < duration_samples:
@@ -130,24 +126,13 @@ class DtmfSender:
                 volume=volume,
                 duration=current_duration,
             )
-            pkt = RtpPacket(
-                payload_type=self._dtmf_payload_type,
-                sequence_number=self._sender.sequence_number,
-                timestamp=event_timestamp,
-                ssrc=self._sender.ssrc,
-                payload=ev.serialize(),
+            self._sender.send_raw(
+                self._dtmf_payload_type, ev.serialize(),
+                event_timestamp, marker=0, addr=addr,
             )
-            data = pkt.serialize()
-            self._sender._transport.send(data, addr)
-            self._sender._sequence_number = uint16_add(
-                self._sender._sequence_number, 1
-            )
-            self._sender._packets_sent += 1
-            self._sender._octets_sent += len(ev.serialize())
-            packets.append(data)
             current_duration += step_samples
 
-        # End packets (3 redundant, RFC 4733 §2.5.1.4)
+        # End packets (3 redundant, RFC 4733 Section 2.5.1.4)
         for i in range(3):
             ev = DtmfEvent(
                 event=event_code,
@@ -155,21 +140,7 @@ class DtmfSender:
                 volume=volume,
                 duration=duration_samples,
             )
-            pkt = RtpPacket(
-                payload_type=self._dtmf_payload_type,
-                marker=1 if i == 0 else 0,
-                sequence_number=self._sender.sequence_number,
-                timestamp=event_timestamp,
-                ssrc=self._sender.ssrc,
-                payload=ev.serialize(),
+            self._sender.send_raw(
+                self._dtmf_payload_type, ev.serialize(),
+                event_timestamp, marker=1 if i == 0 else 0, addr=addr,
             )
-            data = pkt.serialize()
-            self._sender._transport.send(data, addr)
-            self._sender._sequence_number = uint16_add(
-                self._sender._sequence_number, 1
-            )
-            self._sender._packets_sent += 1
-            self._sender._octets_sent += len(ev.serialize())
-            packets.append(data)
-
-        return packets
