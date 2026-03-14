@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from aiortp.packet import (
+    RTCP_PSFB_FIR,
     RTCP_PSFB_PLI,
     RtcpPsfbPacket,
 )
@@ -146,6 +147,28 @@ class TestVideoSessionPLI:
             session._handle_rtcp(bytes(pli))
 
             assert pli_received.is_set()
+        finally:
+            await session.close()
+
+    async def test_fir_triggers_keyframe_callback(self) -> None:
+        """Receiving a FIR packet also triggers on_keyframe_needed."""
+        session = await VideoRTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 0),
+            payload_type=96,
+        )
+        try:
+            fir_received = asyncio.Event()
+            session.on_keyframe_needed = lambda: fir_received.set()
+
+            fir = RtcpPsfbPacket(
+                fmt=RTCP_PSFB_FIR,
+                ssrc=12345,
+                media_ssrc=session._ssrc,
+            )
+            session._handle_rtcp(bytes(fir))
+
+            assert fir_received.is_set()
         finally:
             await session.close()
 

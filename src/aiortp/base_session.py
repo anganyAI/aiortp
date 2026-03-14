@@ -10,6 +10,7 @@ import asyncio
 import logging
 import random
 import time
+from collections.abc import Callable
 from typing import Any
 
 from . import clock
@@ -75,6 +76,13 @@ class BaseRTPSession:
 
         # Remote SSRC (learned from first inbound packet by subclasses)
         self._remote_ssrc: int | None = None
+
+        # Last received receiver report (for stats exposure)
+        self._last_rr: RtcpReceiverInfo | None = None
+
+        # Callback for incoming receiver reports
+        self.on_receiver_report: Callable[[RtcpReceiverInfo], None] | None = None
+        """Called when a Receiver Report block is received from the remote."""
 
         # Port tracking for allocator release on close
         self._allocated_rtp_port: int | None = None
@@ -240,6 +248,14 @@ class BaseRTPSession:
         self._last_sr_ntp = ntp_timestamp
         self._last_sr_received_at = time.monotonic()
 
+    def _process_receiver_reports(self, reports: list[RtcpReceiverInfo]) -> None:
+        """Process incoming RR blocks from SR or RR packets."""
+        for report in reports:
+            if report.ssrc == self._ssrc:
+                self._last_rr = report
+                if self.on_receiver_report is not None:
+                    self.on_receiver_report(report)
+
     def _send_bye(self) -> None:
         """Send RTCP BYE."""
         if self._rtcp_transport is None:
@@ -261,6 +277,10 @@ class BaseRTPSession:
             result["packets_received"] = self._stream_stats.packets_received
             result["packets_lost"] = self._stream_stats.packets_lost
             result["jitter"] = self._stream_stats.jitter
+        if self._last_rr is not None:
+            result["remote_fraction_lost"] = self._last_rr.fraction_lost
+            result["remote_packets_lost"] = self._last_rr.packets_lost
+            result["remote_jitter"] = self._last_rr.jitter
         return result
 
     def _on_closing(self) -> None:

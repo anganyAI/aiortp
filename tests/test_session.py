@@ -2,7 +2,12 @@ import asyncio
 
 import pytest
 
-from aiortp.packet import RtcpPacket, RtcpSrPacket
+from aiortp.packet import (
+    RtcpPacket,
+    RtcpReceiverInfo,
+    RtcpRrPacket,
+    RtcpSrPacket,
+)
 from aiortp.session import RTPSession
 
 
@@ -201,3 +206,85 @@ async def test_rr_sent_when_receiving() -> None:
 
     await session_a.close()
     await session_b.close()
+
+
+@pytest.mark.asyncio
+async def test_incoming_rr_processed() -> None:
+    """Incoming RR updates stats and fires callback."""
+    session = await RTPSession.create(
+        local_addr=("127.0.0.1", 0),
+        remote_addr=("127.0.0.1", 19999),
+        payload_type=0,
+        rtcp_interval=60.0,
+    )
+
+    received_rr: list[RtcpReceiverInfo] = []
+    session.on_receiver_report = lambda rr: received_rr.append(rr)
+
+    # Simulate receiving an RR that reports on our SSRC
+    rr = RtcpRrPacket(
+        ssrc=99999,
+        reports=[
+            RtcpReceiverInfo(
+                ssrc=session._ssrc,
+                fraction_lost=25,
+                packets_lost=10,
+                highest_sequence=500,
+                jitter=3,
+                lsr=0,
+                dlsr=0,
+            )
+        ],
+    )
+    session._handle_rtcp(bytes(rr))
+
+    assert len(received_rr) == 1
+    assert received_rr[0].fraction_lost == 25
+
+    stats = session.stats
+    assert stats["remote_fraction_lost"] == 25
+    assert stats["remote_packets_lost"] == 10
+    assert stats["remote_jitter"] == 3
+
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_incoming_rr_in_sr_processed() -> None:
+    """RR blocks embedded in SR are also processed."""
+    from aiortp.packet import RtcpSenderInfo
+
+    session = await RTPSession.create(
+        local_addr=("127.0.0.1", 0),
+        remote_addr=("127.0.0.1", 19999),
+        payload_type=0,
+        rtcp_interval=60.0,
+    )
+
+    sr = RtcpSrPacket(
+        ssrc=88888,
+        sender_info=RtcpSenderInfo(
+            ntp_timestamp=1000 << 32,
+            rtp_timestamp=0,
+            packet_count=50,
+            octet_count=8000,
+        ),
+        reports=[
+            RtcpReceiverInfo(
+                ssrc=session._ssrc,
+                fraction_lost=50,
+                packets_lost=20,
+                highest_sequence=1000,
+                jitter=7,
+                lsr=0,
+                dlsr=0,
+            )
+        ],
+    )
+    session._handle_rtcp(bytes(sr))
+
+    stats = session.stats
+    assert stats["remote_fraction_lost"] == 50
+    assert stats["remote_jitter"] == 7
+
+    await session.close()

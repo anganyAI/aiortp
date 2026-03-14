@@ -15,11 +15,13 @@ from .base_session import BaseRTPSession
 from .h264 import H264Depacketizer, H264Packetizer, is_keyframe_nal
 from .jitterbuffer import JitterBuffer
 from .packet import (
+    RTCP_PSFB_FIR,
     RTCP_PSFB_PLI,
     RTCP_RTPFB_NACK,
     RtcpByePacket,
     RtcpPacket,
     RtcpPsfbPacket,
+    RtcpRrPacket,
     RtcpRtpfbPacket,
     RtcpSrPacket,
     RtpPacket,
@@ -291,11 +293,16 @@ class VideoRTPSession(BaseRTPSession):
             return
 
         for packet in packets:
-            if isinstance(packet, RtcpPsfbPacket) and packet.fmt == RTCP_PSFB_PLI:
+            if isinstance(packet, RtcpPsfbPacket) and packet.fmt in (
+                RTCP_PSFB_PLI, RTCP_PSFB_FIR,
+            ):
                 if self.on_keyframe_needed is not None:
                     self.on_keyframe_needed()
             elif isinstance(packet, RtcpSrPacket):
                 self._record_incoming_sr(packet.sender_info.ntp_timestamp)
+                self._process_receiver_reports(packet.reports)
+            elif isinstance(packet, RtcpRrPacket):
+                self._process_receiver_reports(packet.reports)
             elif isinstance(packet, RtcpByePacket):
                 logger.info("Video: received RTCP BYE from %s", packet.sources)
 

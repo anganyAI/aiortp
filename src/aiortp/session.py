@@ -12,6 +12,7 @@ from .jitterbuffer import JitterBuffer
 from .packet import (
     RtcpByePacket,
     RtcpPacket,
+    RtcpRrPacket,
     RtcpSrPacket,
     RtpPacket,
 )
@@ -161,6 +162,9 @@ class RTPSession(BaseRTPSession):
         for packet in packets:
             if isinstance(packet, RtcpSrPacket):
                 self._record_incoming_sr(packet.sender_info.ntp_timestamp)
+                self._process_receiver_reports(packet.reports)
+            elif isinstance(packet, RtcpRrPacket):
+                self._process_receiver_reports(packet.reports)
             elif isinstance(packet, RtcpByePacket):
                 logger.info("Received RTCP BYE from %s", packet.sources)
 
