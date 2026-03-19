@@ -387,7 +387,8 @@ class VideoRTPSession(BaseRTPSession):
         packet-loss recovery before the PLI response arrives.
         """
         self._send_pli()
-        self._awaiting_keyframe = False
+        if not self._awaiting_keyframe_enabled:
+            self._awaiting_keyframe = False
 
     def set_passthrough(self, enabled: bool = True) -> None:
         """Enable or disable passthrough (bridge) mode.

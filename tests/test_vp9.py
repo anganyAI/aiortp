@@ -17,6 +17,29 @@ from aiortp.vp9 import (
 )
 
 
+def _make_vp9_bitstream_byte(
+    *,
+    profile: int = 0,
+    show_existing: bool = False,
+    frame_type: int = 0,
+) -> int:
+    """Build the first byte of a VP9 bitstream (uncompressed header).
+
+    Layout (MSB→LSB for profiles 0-1):
+      bits 7-6: frame_marker (0b10 = 2)
+      bit 5:    profile_low_bit
+      bit 4:    profile_high_bit
+      bit 3:    show_existing_frame
+      bit 2:    frame_type (0=key, 1=inter)
+      bits 1-0: unused (zeroed)
+    """
+    marker = 0x02  # frame_marker = 2
+    low = profile & 0x01
+    high = (profile >> 1) & 0x01
+    byte = (marker << 6) | (low << 5) | (high << 4) | (int(show_existing) << 3) | (frame_type << 2)
+    return byte & 0xFF
+
+
 def _make_vp9_payload(
     *,
     start: bool = False,
@@ -365,3 +388,122 @@ class TestVP9Roundtrip:
         assert len(all_frames) == 2
         assert all_frames[0] == (frame1, True)
         assert all_frames[1] == (frame2, False)
+
+
+# ── VP9 bitstream keyframe override ─────────────────────────────
+
+
+class TestVP9KeyframeOverride:
+    """Test the VP9 bitstream cross-check that overrides P=1 to keyframe."""
+
+    def test_override_profile0_keyframe(self) -> None:
+        """P=1 in RTP descriptor but frame_type=0 in bitstream → keyframe."""
+        depkt = VP9Depacketizer()
+        bs_byte = _make_vp9_bitstream_byte(profile=0, frame_type=0)
+        payload = _make_vp9_payload(
+            start=True,
+            end=True,
+            keyframe=False,
+            data=bytes([bs_byte, 0x00]),
+        )
+        result = depkt.feed(payload, marker=True)
+        assert len(result) == 1
+        assert result[0][1] is True  # promoted to keyframe
+
+    def test_override_profile1_keyframe(self) -> None:
+        """Profile 1 keyframe with P=1 in RTP → should still be promoted."""
+        depkt = VP9Depacketizer()
+        bs_byte = _make_vp9_bitstream_byte(profile=1, frame_type=0)
+        payload = _make_vp9_payload(
+            start=True,
+            end=True,
+            keyframe=False,
+            data=bytes([bs_byte, 0x00]),
+        )
+        result = depkt.feed(payload, marker=True)
+        assert len(result) == 1
+        assert result[0][1] is True
+
+    def test_no_override_inter_frame(self) -> None:
+        """frame_type=1 in bitstream → stays as inter-frame."""
+        depkt = VP9Depacketizer()
+        bs_byte = _make_vp9_bitstream_byte(profile=0, frame_type=1)
+        payload = _make_vp9_payload(
+            start=True,
+            end=True,
+            keyframe=False,
+            data=bytes([bs_byte, 0x00]),
+        )
+        result = depkt.feed(payload, marker=True)
+        assert len(result) == 1
+        assert result[0][1] is False
+
+    def test_no_override_invalid_frame_marker(self) -> None:
+        """Invalid frame_marker (not 0x02) → skip cross-check."""
+        depkt = VP9Depacketizer()
+        # frame_marker=0 instead of 2 → byte starts with 0b00...
+        bad_byte = 0x00  # frame_marker=0, all zeros
+        payload = _make_vp9_payload(
+            start=True,
+            end=True,
+            keyframe=False,
+            data=bytes([bad_byte, 0x00]),
+        )
+        result = depkt.feed(payload, marker=True)
+        assert len(result) == 1
+        assert result[0][1] is False  # not promoted
+
+    def test_no_override_profile2(self) -> None:
+        """Profile 2 frames have different bit layout → skip cross-check."""
+        depkt = VP9Depacketizer()
+        bs_byte = _make_vp9_bitstream_byte(profile=2, frame_type=0)
+        payload = _make_vp9_payload(
+            start=True,
+            end=True,
+            keyframe=False,
+            data=bytes([bs_byte, 0x00]),
+        )
+        result = depkt.feed(payload, marker=True)
+        assert len(result) == 1
+        assert result[0][1] is False  # not promoted — profile >= 2
+
+    def test_no_override_show_existing(self) -> None:
+        """show_existing_frame=1 → skip frame_type check."""
+        depkt = VP9Depacketizer()
+        bs_byte = _make_vp9_bitstream_byte(profile=0, show_existing=True, frame_type=0)
+        payload = _make_vp9_payload(
+            start=True,
+            end=True,
+            keyframe=False,
+            data=bytes([bs_byte, 0x00]),
+        )
+        result = depkt.feed(payload, marker=True)
+        assert len(result) == 1
+        assert result[0][1] is False  # not promoted
+
+    def test_no_override_when_already_keyframe(self) -> None:
+        """P=0 in RTP descriptor (already keyframe) → cross-check skipped."""
+        depkt = VP9Depacketizer()
+        bs_byte = _make_vp9_bitstream_byte(profile=0, frame_type=0)
+        payload = _make_vp9_payload(
+            start=True,
+            end=True,
+            keyframe=True,
+            data=bytes([bs_byte, 0x00]),
+        )
+        result = depkt.feed(payload, marker=True)
+        assert len(result) == 1
+        assert result[0][1] is True  # keyframe from RTP descriptor
+
+    def test_no_override_empty_frame_data(self) -> None:
+        """Empty assembled frame → cross-check skipped gracefully."""
+        depkt = VP9Depacketizer()
+        payload = _make_vp9_payload(
+            start=True,
+            end=True,
+            keyframe=False,
+            data=b"",
+        )
+        result = depkt.feed(payload, marker=True)
+        assert len(result) == 1
+        assert result[0][1] is False

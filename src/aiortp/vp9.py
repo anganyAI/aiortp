@@ -180,7 +180,7 @@ class VP9Depacketizer:
                 bs_byte = complete[0]
                 frame_marker = (bs_byte >> 6) & 0x03
                 if frame_marker == 0x02:  # valid VP9 frame marker
-                    profile = ((bs_byte >> 4) & 0x02) | ((bs_byte >> 5) & 0x01)
+                    profile = ((bs_byte >> 3) & 0x02) | ((bs_byte >> 5) & 0x01)
                     if profile < 2:
                         show_existing = (bs_byte >> 3) & 1
                         if not show_existing:

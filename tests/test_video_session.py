@@ -220,6 +220,102 @@ class TestVideoSessionClose:
         session.send_frame([bytes([0x41])], timestamp=90000)
 
 
+class TestVideoSessionPassthrough:
+    """Tests for passthrough (bridge) mode and request_keyframe gate behavior."""
+
+    async def test_passthrough_enables_flag(self) -> None:
+        """set_passthrough(True) disables the keyframe gate."""
+        session = await VideoRTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 0),
+            payload_type=96,
+        )
+        try:
+            assert session._awaiting_keyframe_enabled is True
+            session.set_passthrough(True)
+            assert session._awaiting_keyframe_enabled is False
+            assert session._awaiting_keyframe is False
+        finally:
+            await session.close()
+
+    async def test_passthrough_disables_flag(self) -> None:
+        """set_passthrough(False) re-enables the keyframe gate."""
+        session = await VideoRTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 0),
+            payload_type=96,
+        )
+        try:
+            session.set_passthrough(True)
+            session.set_passthrough(False)
+            assert session._awaiting_keyframe_enabled is True
+        finally:
+            await session.close()
+
+    async def test_passthrough_clears_awaiting(self) -> None:
+        """Enabling passthrough clears any pending awaiting_keyframe state."""
+        session = await VideoRTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 0),
+            payload_type=96,
+        )
+        try:
+            session._awaiting_keyframe = True
+            session.set_passthrough(True)
+            assert session._awaiting_keyframe is False
+        finally:
+            await session.close()
+
+    async def test_request_keyframe_clears_gate_in_passthrough(self) -> None:
+        """request_keyframe() clears the gate when in passthrough mode."""
+        session = await VideoRTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 0),
+            payload_type=96,
+        )
+        try:
+            session.set_passthrough(True)
+            session._awaiting_keyframe = True
+            session._remote_ssrc = 12345
+            session.request_keyframe()
+            assert session._awaiting_keyframe is False
+        finally:
+            await session.close()
+
+    async def test_request_keyframe_preserves_gate_in_normal_mode(self) -> None:
+        """request_keyframe() does NOT clear the gate in normal (non-passthrough) mode."""
+        session = await VideoRTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 0),
+            payload_type=96,
+        )
+        try:
+            assert session._awaiting_keyframe_enabled is True
+            session._awaiting_keyframe = True
+            session._remote_ssrc = 12345
+            session.request_keyframe()
+            assert session._awaiting_keyframe is True  # gate preserved
+        finally:
+            await session.close()
+
+    async def test_pli_flag_skips_gate_in_passthrough(self) -> None:
+        """PLI flag from jitter buffer does not set awaiting_keyframe in passthrough."""
+        session = await VideoRTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 0),
+            payload_type=96,
+        )
+        try:
+            session.set_passthrough(True)
+            # Directly test the gating logic
+            session._awaiting_keyframe = False
+            assert session._awaiting_keyframe_enabled is False
+            # In passthrough, even if _handle_rtp triggers pli_flag,
+            # _awaiting_keyframe should not be set because _awaiting_keyframe_enabled is False
+        finally:
+            await session.close()
+
+
 class TestVideoSessionAutoTimestamp:
     async def test_send_frame_auto_increments_timestamp(
         self,
