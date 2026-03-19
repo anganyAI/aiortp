@@ -127,6 +127,7 @@ class VideoRTPSession(BaseRTPSession):
         # State
         self._rtp_packet_count = 0
         self._awaiting_keyframe = False
+        self._awaiting_keyframe_enabled = True
 
     @classmethod
     async def create(
@@ -217,7 +218,8 @@ class VideoRTPSession(BaseRTPSession):
         if pli_flag:
             self._send_pli()
             self._handler.depacketizer.reset()
-            self._awaiting_keyframe = True
+            if self._awaiting_keyframe_enabled:
+                self._awaiting_keyframe = True
             # Keep payloads for the frame being delivered (if any);
             # clear stale timestamps that were dropped by the jitter buffer.
             if frame is not None:
@@ -375,8 +377,30 @@ class VideoRTPSession(BaseRTPSession):
         logger.debug("Sent PLI to remote SSRC %d", self._remote_ssrc)
 
     def request_keyframe(self) -> None:
-        """Explicitly request a keyframe from the remote sender via PLI."""
+        """Explicitly request a keyframe from the remote sender via PLI.
+
+        Also clears the internal awaiting-keyframe gate so inbound
+        frames resume delivery immediately.  In bridge/forwarding
+        topologies the downstream receiver handles decoder recovery
+        via its own RTCP feedback; blocking frames here would cause
+        a permanent video freeze when the jitter buffer triggers
+        packet-loss recovery before the PLI response arrives.
+        """
         self._send_pli()
+        self._awaiting_keyframe = False
+
+    def set_passthrough(self, enabled: bool = True) -> None:
+        """Enable or disable passthrough (bridge) mode.
+
+        In passthrough mode the awaiting-keyframe gate is disabled so
+        every assembled frame is delivered to :attr:`on_frame` regardless
+        of keyframe status.  Use this when the session forwards raw
+        bitstream to a remote decoder that handles its own recovery
+        (e.g. an SFU / video bridge).
+        """
+        self._awaiting_keyframe_enabled = not enabled
+        if enabled:
+            self._awaiting_keyframe = False
 
     def _send_nack(self) -> None:
         """Send RTCP NACK for missing packets."""

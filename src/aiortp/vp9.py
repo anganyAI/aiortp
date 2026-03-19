@@ -172,6 +172,26 @@ class VP9Depacketizer:
         if e_end and self._frame_buffer is not None:
             complete = bytes(self._frame_buffer)
             keyframe = self._is_keyframe
+            # Cross-check: VP9 bitstream frame_type (bit 2 of first byte
+            # for profile 0, after 2-bit frame_marker + 2-bit profile).
+            # frame_type=0 → keyframe, frame_type=1 → inter.
+            # Some encoders set P=1 in the RTP descriptor even for keyframes.
+            if len(complete) >= 1 and not keyframe:
+                bs_byte = complete[0]
+                frame_marker = (bs_byte >> 6) & 0x03
+                if frame_marker == 0x02:  # valid VP9 frame marker
+                    profile = ((bs_byte >> 4) & 0x02) | ((bs_byte >> 5) & 0x01)
+                    if profile < 2:
+                        show_existing = (bs_byte >> 3) & 1
+                        if not show_existing:
+                            frame_type = (bs_byte >> 2) & 1
+                            if frame_type == 0:
+                                logger.debug(
+                                    "VP9 keyframe override: P=1 in RTP but "
+                                    "frame_type=0 in bitstream (0x%02x)",
+                                    bs_byte,
+                                )
+                                keyframe = True
             self._frame_buffer = None
             self._is_keyframe = False
             return [(complete, keyframe)]
