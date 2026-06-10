@@ -47,6 +47,8 @@ class BaseRTPSession:
         clock_rate: int = 8000,
         cname: str = "aiortp",
         rtcp_interval: float = 5.0,
+        nack_retransmit: bool = False,
+        symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
     ) -> None:
         self._payload_type = payload_type
@@ -54,6 +56,8 @@ class BaseRTPSession:
         self._clock_rate = clock_rate
         self._cname = cname
         self._rtcp_interval = rtcp_interval
+        self._nack_retransmit = nack_retransmit
+        self._symmetric_rtp = symmetric_rtp
         self._port_allocator = port_allocator
 
         # Transport
@@ -154,6 +158,7 @@ class BaseRTPSession:
             payload_type=self._payload_type,
             ssrc=self._ssrc,
             clock_rate=self._clock_rate,
+            enable_history=self._nack_retransmit,
         )
 
         # Start RTCP loop
@@ -163,6 +168,31 @@ class BaseRTPSession:
         """Update remote address (e.g., for re-INVITE)."""
         self._remote_addr = addr
         self._remote_rtcp_addr = self._compute_rtcp_addr(addr)
+
+    def _latch_rtp_addr(self, addr: tuple[str, int]) -> None:
+        """Follow the remote RTP address from inbound packets (RFC 4961)."""
+        if not self._symmetric_rtp or addr == self._remote_addr:
+            return
+        logger.info("Latched remote RTP address %s -> %s", self._remote_addr, addr)
+        self._remote_addr = addr
+
+    def _latch_rtcp_addr(self, addr: tuple[str, int]) -> None:
+        """Follow the remote RTCP address from inbound packets (RFC 4961)."""
+        if not self._symmetric_rtp or addr == self._remote_rtcp_addr:
+            return
+        logger.info("Latched remote RTCP address %s -> %s", self._remote_rtcp_addr, addr)
+        self._remote_rtcp_addr = addr
+
+    def _remote_ssrc_changed(self, ssrc: int) -> None:
+        """Latch the remote SSRC and reset inbound stream statistics.
+
+        Called on the first media packet and whenever the source changes
+        mid-call (re-INVITE, hold/resume, SBC failover).
+        """
+        if self._remote_ssrc is not None:
+            logger.info("Remote SSRC changed from %d to %d", self._remote_ssrc, ssrc)
+        self._remote_ssrc = ssrc
+        self._stream_stats = StreamStatistics(clockrate=self._clock_rate)
 
     # ── RTCP ──────────────────────────────────────────────────
 
@@ -317,8 +347,8 @@ class BaseRTPSession:
 
     # ── Abstract ──────────────────────────────────────────────
 
-    def _handle_rtp(self, data: bytes) -> None:
+    def _handle_rtp(self, data: bytes, addr: tuple[str, int]) -> None:
         raise NotImplementedError
 
-    def _handle_rtcp(self, data: bytes) -> None:
+    def _handle_rtcp(self, data: bytes, addr: tuple[str, int]) -> None:
         raise NotImplementedError

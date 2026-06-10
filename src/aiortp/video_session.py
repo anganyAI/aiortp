@@ -27,7 +27,7 @@ from .packet import (
     RtpPacket,
 )
 from .port_allocator import PortAllocator
-from .stats import NackGenerator, StreamStatistics
+from .stats import NackGenerator
 from .vp8 import VP8Depacketizer, VP8Packetizer
 from .vp9 import VP9Depacketizer, VP9Packetizer
 
@@ -88,6 +88,8 @@ class VideoRTPSession(BaseRTPSession):
         rtcp_interval: float = 5.0,
         jitter_capacity: int = _VIDEO_JITTER_CAPACITY,
         codec: str = "h264",
+        nack_retransmit: bool = True,
+        symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
         fps: int = 30,
     ) -> None:
@@ -103,6 +105,8 @@ class VideoRTPSession(BaseRTPSession):
             clock_rate=clock_rate,
             cname=cname,
             rtcp_interval=rtcp_interval,
+            nack_retransmit=nack_retransmit,
+            symmetric_rtp=symmetric_rtp,
             port_allocator=port_allocator,
         )
         self._codec = codec
@@ -141,6 +145,8 @@ class VideoRTPSession(BaseRTPSession):
         rtcp_interval: float = 5.0,
         jitter_capacity: int = _VIDEO_JITTER_CAPACITY,
         codec: str = "h264",
+        nack_retransmit: bool = True,
+        symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
         fps: int = 30,
     ) -> VideoRTPSession:
@@ -153,6 +159,8 @@ class VideoRTPSession(BaseRTPSession):
             rtcp_interval=rtcp_interval,
             jitter_capacity=jitter_capacity,
             codec=codec,
+            nack_retransmit=nack_retransmit,
+            symmetric_rtp=symmetric_rtp,
             port_allocator=port_allocator,
             fps=fps,
         )
@@ -163,7 +171,7 @@ class VideoRTPSession(BaseRTPSession):
 
     # ── Inbound ──────────────────────────────────────────────
 
-    def _handle_rtp(self, data: bytes) -> None:
+    def _handle_rtp(self, data: bytes, addr: tuple[str, int]) -> None:
         """Handle incoming RTP packet."""
         self._rtp_packet_count += 1
         if self._rtp_packet_count == 1:
@@ -175,6 +183,8 @@ class VideoRTPSession(BaseRTPSession):
             logger.warning("Failed to parse video RTP packet (len=%d)", len(data))
             return
 
+        self._latch_rtp_addr(addr)
+
         if packet.payload_type != self._payload_type:
             if self._rtp_packet_count <= 5:
                 logger.info(
@@ -185,9 +195,9 @@ class VideoRTPSession(BaseRTPSession):
                 )
             return
 
-        # Learn remote SSRC
+        # Learn remote SSRC from the first packet, relatch on change
         if self._remote_ssrc is None:
-            self._remote_ssrc = packet.ssrc
+            self._remote_ssrc_changed(packet.ssrc)
             logger.info(
                 "First video RTP packet: ssrc=%d, pt=%d, seq=%d, len=%d",
                 packet.ssrc,
@@ -195,10 +205,10 @@ class VideoRTPSession(BaseRTPSession):
                 packet.sequence_number,
                 len(packet.payload),
             )
+        elif packet.ssrc != self._remote_ssrc:
+            self._on_source_changed(packet.ssrc)
 
-        # Stream statistics
-        if self._stream_stats is None:
-            self._stream_stats = StreamStatistics(clockrate=self._clock_rate)
+        assert self._stream_stats is not None
         self._stream_stats.add(packet)
 
         # NACK tracking
@@ -232,6 +242,17 @@ class VideoRTPSession(BaseRTPSession):
 
         if frame is not None:
             self._deliver_frame(frame.timestamp)
+
+    def _on_source_changed(self, ssrc: int) -> None:
+        """Reset the video pipeline for a new source and request a keyframe."""
+        self._remote_ssrc_changed(ssrc)
+        self._jitter_buffer.reset()
+        self._handler.depacketizer.reset()
+        self._nack_gen = NackGenerator()
+        self._pending_payloads.clear()
+        if self._awaiting_keyframe_enabled:
+            self._awaiting_keyframe = True
+        self._send_pli()
 
     def _evict_old_payloads(self) -> None:
         """Evict oldest pending timestamps when the dict grows too large."""
@@ -284,13 +305,15 @@ class VideoRTPSession(BaseRTPSession):
                         continue
                 self.on_frame(frame_data, timestamp, is_keyframe)  # type: ignore[misc]
 
-    def _handle_rtcp(self, data: bytes) -> None:
+    def _handle_rtcp(self, data: bytes, addr: tuple[str, int]) -> None:
         """Handle incoming RTCP packet."""
         try:
             packets = RtcpPacket.parse(data)
         except ValueError:
             logger.warning("Failed to parse video RTCP packet")
             return
+
+        self._latch_rtcp_addr(addr)
 
         for packet in packets:
             if isinstance(packet, RtcpPsfbPacket) and packet.fmt in (

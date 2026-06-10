@@ -9,11 +9,16 @@ import pytest
 from aiortp.packet import (
     RTCP_PSFB_FIR,
     RTCP_PSFB_PLI,
+    RtcpPacket,
     RtcpPsfbPacket,
+    RtpPacket,
 )
 from aiortp.video_session import VideoRTPSession
 
 _Pair = tuple[VideoRTPSession, VideoRTPSession]
+
+# Dummy source address for direct _handle_rtp/_handle_rtcp injection
+_ADDR = ("198.51.100.1", 5004)
 
 
 @pytest.fixture
@@ -144,7 +149,7 @@ class TestVideoSessionPLI:
                 ssrc=12345,
                 media_ssrc=session._ssrc,
             )
-            session._handle_rtcp(bytes(pli))
+            session._handle_rtcp(bytes(pli), _ADDR)
 
             assert pli_received.is_set()
         finally:
@@ -166,7 +171,7 @@ class TestVideoSessionPLI:
                 ssrc=12345,
                 media_ssrc=session._ssrc,
             )
-            session._handle_rtcp(bytes(fir))
+            session._handle_rtcp(bytes(fir), _ADDR)
 
             assert fir_received.is_set()
         finally:
@@ -195,7 +200,7 @@ class TestVideoSessionPLI:
             ssrc=receiver._ssrc,
             media_ssrc=sender._ssrc,
         )
-        sender._handle_rtcp(bytes(pli))
+        sender._handle_rtcp(bytes(pli), _ADDR)
         assert pli_received.is_set()
 
 
@@ -312,6 +317,74 @@ class TestVideoSessionPassthrough:
             assert session._awaiting_keyframe_enabled is False
             # In passthrough, even if _handle_rtp triggers pli_flag,
             # _awaiting_keyframe should not be set because _awaiting_keyframe_enabled is False
+        finally:
+            await session.close()
+
+
+class TestVideoSourceChange:
+    async def test_ssrc_change_resets_and_sends_pli(self) -> None:
+        """A new source mid-stream relatches, gates on keyframe and sends PLI."""
+        session = await VideoRTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 9),
+            payload_type=96,
+        )
+        try:
+            sent_rtcp: list[bytes] = []
+            session._rtcp_transport.send = lambda data, addr=None: sent_rtcp.append(data)  # type: ignore[union-attr, assignment]
+
+            received: list[tuple[bytes, int, bool]] = []
+            session.on_frame = lambda nal, ts, kf: received.append((nal, ts, kf))
+
+            # First source delivers an IDR keyframe
+            idr = bytes([0x65]) + b"\xab" * 10
+            pkt = RtpPacket(
+                payload_type=96,
+                sequence_number=100,
+                timestamp=3000,
+                ssrc=1111,
+                marker=1,
+                payload=idr,
+            )
+            session._handle_rtp(pkt.serialize(), _ADDR)
+            assert session._remote_ssrc == 1111
+            assert len(received) == 1
+
+            # New source mid-stream, starting with a non-keyframe
+            non_idr = bytes([0x41]) + b"\x01\x02"
+            pkt = RtpPacket(
+                payload_type=96,
+                sequence_number=7000,
+                timestamp=90000,
+                ssrc=2222,
+                marker=1,
+                payload=non_idr,
+            )
+            session._handle_rtp(pkt.serialize(), _ADDR)
+
+            assert session._remote_ssrc == 2222
+            assert session._awaiting_keyframe is True
+            assert len(received) == 1  # non-keyframe gated until keyframe arrives
+            plis = [
+                p
+                for data in sent_rtcp
+                for p in RtcpPacket.parse(data)
+                if isinstance(p, RtcpPsfbPacket) and p.fmt == RTCP_PSFB_PLI
+            ]
+            assert len(plis) >= 1
+            assert plis[-1].media_ssrc == 2222
+
+            # Keyframe from the new source resumes delivery
+            pkt = RtpPacket(
+                payload_type=96,
+                sequence_number=7001,
+                timestamp=93000,
+                ssrc=2222,
+                marker=1,
+                payload=idr,
+            )
+            session._handle_rtp(pkt.serialize(), _ADDR)
+            assert len(received) == 2
         finally:
             await session.close()
 

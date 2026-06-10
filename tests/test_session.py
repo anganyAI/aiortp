@@ -4,6 +4,7 @@ import struct
 import pytest
 
 from aiortp.codecs import get_codec
+from aiortp.dtmf import DtmfEvent
 from aiortp.packet import (
     RTCP_RTPFB_NACK,
     RtcpPacket,
@@ -16,6 +17,9 @@ from aiortp.packet import (
 from aiortp.sender import RtpSender
 from aiortp.session import RTPSession
 from aiortp.transport import RtpTransport
+
+# Dummy source address for direct _handle_rtp/_handle_rtcp injection
+_ADDR = ("198.51.100.1", 5004)
 
 
 def _plc_session(plc: bool = True) -> RTPSession:
@@ -36,7 +40,7 @@ def _inject_pcmu(session: RTPSession, sequences: tuple[int, ...]) -> None:
         packet = RtpPacket(
             payload_type=0, sequence_number=seq, timestamp=seq * 160, payload=payload
         )
-        session._handle_rtp(packet.serialize())
+        session._handle_rtp(packet.serialize(), _ADDR)
 
 
 def test_plc_inserts_concealment_on_loss() -> None:
@@ -296,7 +300,7 @@ async def test_incoming_rr_processed() -> None:
             )
         ],
     )
-    session._handle_rtcp(bytes(rr))
+    session._handle_rtcp(bytes(rr), _ADDR)
 
     assert len(received_rr) == 1
     assert received_rr[0].fraction_lost == 25
@@ -341,7 +345,7 @@ async def test_incoming_rr_in_sr_processed() -> None:
             )
         ],
     )
-    session._handle_rtcp(bytes(sr))
+    session._handle_rtcp(bytes(sr), _ADDR)
 
     stats = session.stats
     assert stats["remote_fraction_lost"] == 50
@@ -354,7 +358,7 @@ class TestNackRetransmission:
     def test_sender_retransmits_from_history(self) -> None:
         """Sender retransmits packets that are in the history buffer."""
         sent: list[bytes] = []
-        transport = RtpTransport(on_rtp=lambda d: None, on_rtcp=lambda d: None)
+        transport = RtpTransport(on_rtp=lambda d, a: None, on_rtcp=lambda d, a: None)
         transport.send = lambda data, addr=None: sent.append(data)  # type: ignore[assignment]
 
         sender = RtpSender(transport=transport, payload_type=0, ssrc=1000)
@@ -379,7 +383,7 @@ class TestNackRetransmission:
     def test_sender_skips_missing_history(self) -> None:
         """Retransmit returns 0 for packets not in history."""
         sent: list[bytes] = []
-        transport = RtpTransport(on_rtp=lambda d: None, on_rtcp=lambda d: None)
+        transport = RtpTransport(on_rtp=lambda d, a: None, on_rtcp=lambda d, a: None)
         transport.send = lambda data, addr=None: sent.append(data)  # type: ignore[assignment]
 
         sender = RtpSender(transport=transport, payload_type=0, ssrc=1000)
@@ -394,6 +398,7 @@ class TestNackRetransmission:
             remote_addr=("127.0.0.1", 0),
             payload_type=0,
             rtcp_interval=60.0,
+            nack_retransmit=True,
         )
         a_addr = session_a._rtp_transport._transport.get_extra_info("sockname")  # type: ignore[union-attr]
 
@@ -421,10 +426,155 @@ class TestNackRetransmission:
             media_ssrc=session_a._ssrc,
             lost=[nack_seq],
         )
-        session_a._handle_rtcp(bytes(nack))
+        session_a._handle_rtcp(bytes(nack), _ADDR)
 
         # packets_sent doesn't change (retransmit doesn't increment counters)
         assert session_a._sender.packets_sent == packets_before  # type: ignore[union-attr]
+
+        await session_a.close()
+        await session_b.close()
+
+    def test_sender_history_disabled(self) -> None:
+        """With enable_history=False the sender keeps nothing to retransmit."""
+        sent: list[bytes] = []
+        transport = RtpTransport(on_rtp=lambda d, a: None, on_rtcp=lambda d, a: None)
+        transport.send = lambda data, addr=None: sent.append(data)  # type: ignore[assignment]
+
+        sender = RtpSender(transport=transport, payload_type=0, ssrc=1000, enable_history=False)
+        initial_seq = sender.sequence_number
+        for i in range(5):
+            sender.send_frame(b"\x00" * 160, timestamp=i * 160)
+
+        assert sender.retransmit([(initial_seq + 2) & 0xFFFF]) == 0
+        assert len(sent) == 5  # nothing retransmitted
+
+    @pytest.mark.asyncio
+    async def test_audio_session_no_retransmit_by_default(self) -> None:
+        """Audio sessions keep no NACK history unless nack_retransmit=True."""
+        session = await RTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 9),
+            payload_type=0,
+            rtcp_interval=60.0,
+        )
+        for i in range(3):
+            session.send_audio(b"\x00" * 160, timestamp=i * 160)
+        assert session._sender._history == {}  # type: ignore[union-attr]
+        await session.close()
+
+
+def test_dtmf_received_when_callback_assigned_late() -> None:
+    """DTMF arriving before on_dtmf is assigned must not disable reception."""
+    session = RTPSession(payload_type=0, codec=get_codec(0))
+
+    # First digit arrives before any callback is assigned — dropped, not fatal
+    ev = DtmfEvent(event=1, end=True, volume=10, duration=1280)
+    pkt = RtpPacket(payload_type=101, sequence_number=100, timestamp=1000, payload=ev.serialize())
+    session._handle_rtp(pkt.serialize(), _ADDR)
+
+    received: list[tuple[str, int]] = []
+    session.on_dtmf = lambda digit, duration: received.append((digit, duration))
+
+    ev = DtmfEvent(event=2, end=True, volume=10, duration=1280)
+    pkt = RtpPacket(payload_type=101, sequence_number=101, timestamp=2000, payload=ev.serialize())
+    session._handle_rtp(pkt.serialize(), _ADDR)
+
+    assert received == [("2", 1280)]
+
+
+def test_remote_ssrc_change_relatches_and_resets() -> None:
+    """A mid-call SSRC change relatches the source and resets inbound state."""
+    session = RTPSession(payload_type=0, codec=get_codec(0), jitter_prefetch=0)
+    received: list[int] = []
+    session.on_audio = lambda pcm, ts: received.append(ts)
+
+    payload = get_codec(0).encode(b"\x00\x00" * 160)
+    for seq in range(3):
+        pkt = RtpPacket(
+            payload_type=0, sequence_number=seq, timestamp=seq * 160, ssrc=1111, payload=payload
+        )
+        session._handle_rtp(pkt.serialize(), _ADDR)
+    assert session._remote_ssrc == 1111
+    assert len(received) == 2  # two complete frames delivered
+
+    # New source: different SSRC, unrelated sequence space
+    for seq in range(5000, 5003):
+        pkt = RtpPacket(
+            payload_type=0, sequence_number=seq, timestamp=seq * 160, ssrc=2222, payload=payload
+        )
+        session._handle_rtp(pkt.serialize(), _ADDR)
+
+    assert session._remote_ssrc == 2222
+    assert session._stream_stats is not None
+    assert session._stream_stats.packets_received == 3  # stats reset on change
+    assert len(received) == 4  # audio keeps flowing from the new source
+
+
+class TestSymmetricRtp:
+    def _rtp_packet(self) -> bytes:
+        return RtpPacket(
+            payload_type=0, sequence_number=1, timestamp=0, ssrc=42, payload=b"\x00" * 160
+        ).serialize()
+
+    def test_latch_disabled_by_default(self) -> None:
+        session = RTPSession(payload_type=0, codec=get_codec(0))
+        session._remote_addr = ("10.0.0.1", 4000)
+        session._handle_rtp(self._rtp_packet(), ("192.0.2.7", 12345))
+        assert session._remote_addr == ("10.0.0.1", 4000)
+
+    def test_latch_rtp_addr(self) -> None:
+        session = RTPSession(payload_type=0, codec=get_codec(0), symmetric_rtp=True)
+        session._remote_addr = ("10.0.0.1", 4000)
+        session._handle_rtp(self._rtp_packet(), ("192.0.2.7", 12345))
+        assert session._remote_addr == ("192.0.2.7", 12345)
+
+    def test_invalid_packet_does_not_latch(self) -> None:
+        session = RTPSession(payload_type=0, codec=get_codec(0), symmetric_rtp=True)
+        session._remote_addr = ("10.0.0.1", 4000)
+        session._handle_rtp(b"\x00\x01", ("192.0.2.7", 12345))
+        assert session._remote_addr == ("10.0.0.1", 4000)
+
+    def test_latch_rtcp_addr_independent(self) -> None:
+        session = RTPSession(payload_type=0, codec=get_codec(0), symmetric_rtp=True)
+        session._remote_addr = ("10.0.0.1", 4000)
+        session._remote_rtcp_addr = ("10.0.0.1", 4001)
+        rr = RtcpRrPacket(ssrc=7, reports=[])
+        session._handle_rtcp(bytes(rr), ("192.0.2.7", 12346))
+        assert session._remote_rtcp_addr == ("192.0.2.7", 12346)
+        assert session._remote_addr == ("10.0.0.1", 4000)
+
+    @pytest.mark.asyncio
+    async def test_loopback_latching(self) -> None:
+        """A starts with a wrong remote port; latching B's source makes A reachable."""
+        session_a = await RTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=("127.0.0.1", 9),  # wrong on purpose
+            payload_type=0,
+            rtcp_interval=60.0,
+            symmetric_rtp=True,
+        )
+        a_addr = session_a._rtp_transport._transport.get_extra_info("sockname")  # type: ignore[union-attr]
+        session_b = await RTPSession.create(
+            local_addr=("127.0.0.1", 0),
+            remote_addr=(a_addr[0], a_addr[1]),
+            payload_type=0,
+            rtcp_interval=60.0,
+        )
+        b_addr = session_b._rtp_transport._transport.get_extra_info("sockname")  # type: ignore[union-attr]
+
+        received = asyncio.Event()
+        session_b.on_audio = lambda pcm, ts: received.set()
+
+        # B -> A so A latches B's real source address
+        for i in range(2):
+            session_b.send_audio(b"\x00" * 160, timestamp=i * 160)
+        await asyncio.sleep(0.1)
+        assert session_a._remote_addr == (b_addr[0], b_addr[1])
+
+        # A -> B now reaches B without update_remote
+        for i in range(6):
+            session_a.send_audio(b"\x00" * 160, timestamp=i * 160)
+        await asyncio.wait_for(received.wait(), timeout=2.0)
 
         await session_a.close()
         await session_b.close()

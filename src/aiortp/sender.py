@@ -17,6 +17,7 @@ class RtpSender:
         payload_type: int,
         ssrc: int | None = None,
         clock_rate: int = 8000,
+        enable_history: bool = True,
     ) -> None:
         self._transport = transport
         self._payload_type = payload_type
@@ -28,6 +29,7 @@ class RtpSender:
         self._last_rtp_timestamp = 0
 
         # Packet history for NACK retransmission (seq -> serialized bytes)
+        self._enable_history = enable_history
         self._history: dict[int, bytes] = {}
 
         # Auto-timestamp state
@@ -95,9 +97,10 @@ class RtpSender:
         self._transport.send(data, addr)
 
         # Store in history for NACK retransmission
-        seq = self._sequence_number
-        self._history[seq] = data
-        self._evict_old_history(seq)
+        if self._enable_history:
+            seq = self._sequence_number
+            self._history[seq] = data
+            self._evict_old_history(seq)
 
         self._sequence_number = uint16_add(self._sequence_number, 1)
         self._packets_sent += 1

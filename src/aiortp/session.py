@@ -19,7 +19,6 @@ from .packet import (
 )
 from .plc import PcmConcealer
 from .port_allocator import PortAllocator
-from .stats import StreamStatistics
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +37,8 @@ class RTPSession(BaseRTPSession):
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
         plc: bool = True,
+        nack_retransmit: bool = False,
+        symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
     ) -> None:
         super().__init__(
@@ -46,6 +47,8 @@ class RTPSession(BaseRTPSession):
             clock_rate=clock_rate,
             cname=cname,
             rtcp_interval=rtcp_interval,
+            nack_retransmit=nack_retransmit,
+            symmetric_rtp=symmetric_rtp,
             port_allocator=port_allocator,
         )
         self._codec = codec
@@ -69,8 +72,15 @@ class RTPSession(BaseRTPSession):
         self.on_audio: Callable[[bytes, int], None] | None = None
         self.on_dtmf: Callable[[str, int], None] | None = None
 
+        # Dispatch indirection so on_dtmf can be assigned after packets arrive
+        self._dtmf_receiver = DtmfReceiver(self._dispatch_dtmf)
+
         # DTMF sender (set during create)
         self._dtmf_sender: DtmfSender | None = None
+
+    def _dispatch_dtmf(self, digit: str, duration: int) -> None:
+        if self.on_dtmf is not None:
+            self.on_dtmf(digit, duration)
 
     @classmethod
     async def create(
@@ -88,6 +98,8 @@ class RTPSession(BaseRTPSession):
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
         plc: bool = True,
+        nack_retransmit: bool = False,
+        symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
     ) -> "RTPSession":
         """Async factory to create and bind an RTP session."""
@@ -106,6 +118,8 @@ class RTPSession(BaseRTPSession):
             jitter_prefetch=jitter_prefetch,
             skip_audio_gaps=skip_audio_gaps,
             plc=plc,
+            nack_retransmit=nack_retransmit,
+            symmetric_rtp=symmetric_rtp,
             port_allocator=port_allocator,
         )
         await session._bind_transports(local_addr, remote_addr)
@@ -123,7 +137,7 @@ class RTPSession(BaseRTPSession):
 
         return session
 
-    def _handle_rtp(self, data: bytes) -> None:
+    def _handle_rtp(self, data: bytes, addr: tuple[str, int]) -> None:
         """Handle incoming RTP packet."""
         try:
             packet = RtpPacket.parse(data)
@@ -132,20 +146,19 @@ class RTPSession(BaseRTPSession):
             logger.warning("Failed to parse RTP packet: len=%d header=%s", len(data), header)
             return
 
+        self._latch_rtp_addr(addr)
+
         # Check for DTMF
         if packet.payload_type == self._dtmf_payload_type:
-            if self._dtmf_receiver is not None:
-                self._dtmf_receiver.handle_packet(packet)
+            self._dtmf_receiver.handle_packet(packet)
             return
 
-        # Learn remote SSRC from first media packet
-        if self._remote_ssrc is None:
-            self._remote_ssrc = packet.ssrc
+        # Learn remote SSRC from first media packet, relatch on change
+        if packet.ssrc != self._remote_ssrc:
+            self._remote_ssrc_changed(packet.ssrc)
+            self._jitter_buffer.reset()
 
-        # Initialize stream stats on first packet
-        if self._stream_stats is None:
-            self._stream_stats = StreamStatistics(clockrate=self._clock_rate)
-
+        assert self._stream_stats is not None
         self._stream_stats.add(packet)
 
         # Add to jitter buffer
@@ -185,13 +198,15 @@ class RTPSession(BaseRTPSession):
         timestamp = (next_timestamp - lost * self._codec.samples_per_frame) & 0xFFFFFFFF
         self.on_audio(pcm, timestamp)
 
-    def _handle_rtcp(self, data: bytes) -> None:
+    def _handle_rtcp(self, data: bytes, addr: tuple[str, int]) -> None:
         """Handle incoming RTCP packet."""
         try:
             packets = RtcpPacket.parse(data)
         except ValueError:
             logger.warning("Failed to parse RTCP packet")
             return
+
+        self._latch_rtcp_addr(addr)
 
         for packet in packets:
             if isinstance(packet, RtcpSrPacket):
@@ -203,15 +218,6 @@ class RTPSession(BaseRTPSession):
                 self._handle_incoming_nack(packet)
             elif isinstance(packet, RtcpByePacket):
                 logger.info("Received RTCP BYE from %s", packet.sources)
-
-    @property
-    def _dtmf_receiver(self) -> DtmfReceiver | None:
-        if not hasattr(self, "_dtmf_receiver_instance"):
-            if self.on_dtmf is not None:
-                self._dtmf_receiver_instance: DtmfReceiver | None = DtmfReceiver(self.on_dtmf)
-            else:
-                self._dtmf_receiver_instance = None
-        return self._dtmf_receiver_instance
 
     def send_audio(self, payload: bytes, timestamp: int) -> None:
         """Send encoded audio payload (already codec-encoded)."""

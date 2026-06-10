@@ -53,8 +53,8 @@ def _stun_binding_response(request: bytes, addr: tuple[str, int]) -> bytes:
 class RtpTransport(asyncio.DatagramProtocol):
     def __init__(
         self,
-        on_rtp: Callable[[bytes], None],
-        on_rtcp: Callable[[bytes], None],
+        on_rtp: Callable[[bytes, tuple[str, int]], None],
+        on_rtcp: Callable[[bytes, tuple[str, int]], None],
     ) -> None:
         self._on_rtp = on_rtp
         self._on_rtcp = on_rtcp
@@ -73,9 +73,9 @@ class RtpTransport(asyncio.DatagramProtocol):
                 self._transport.sendto(resp, addr)
             return
         if is_rtcp(data):
-            self._on_rtcp(data)
+            self._on_rtcp(data, addr)
         else:
-            self._on_rtp(data)
+            self._on_rtp(data, addr)
 
     def error_received(self, exc: Exception) -> None:
         logger.warning("Transport error: %s", exc)

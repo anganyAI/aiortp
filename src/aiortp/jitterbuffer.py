@@ -32,6 +32,11 @@ class JitterBuffer:
     def capacity(self) -> int:
         return self._capacity
 
+    def reset(self) -> None:
+        """Discard buffered packets and forget the sequence origin (new source)."""
+        self._packets = [None] * self._capacity
+        self._origin = None
+
     def add(self, packet: RtpPacket) -> tuple[bool, JitterFrame | None]:
         pli_flag = False
         if self._origin is None:

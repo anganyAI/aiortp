@@ -122,7 +122,7 @@ class DtmfSenderTest(TestCase):
         """Sender generates progress + 3 end packets."""
         sent_data: list[bytes] = []
 
-        transport = RtpTransport(on_rtp=lambda d: None, on_rtcp=lambda d: None)
+        transport = RtpTransport(on_rtp=lambda d, a: None, on_rtcp=lambda d, a: None)
         # Mock the transport send
         transport.send = lambda data, addr=None: sent_data.append(data)  # type: ignore[assignment]
 
