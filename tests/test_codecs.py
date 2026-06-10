@@ -2,7 +2,14 @@ import struct
 from unittest import TestCase
 
 from aiortp.codecs import PayloadType, get_codec
-from aiortp.codecs.g711 import PcmaCodec, PcmuCodec
+from aiortp.codecs.g711 import (
+    PcmaCodec,
+    PcmuCodec,
+    _alaw_decode_sample,
+    _alaw_encode_sample,
+    _ulaw_decode_sample,
+    _ulaw_encode_sample,
+)
 from aiortp.codecs.pcm import L16Codec
 
 
@@ -79,6 +86,42 @@ class PcmaCodecTest(TestCase):
         self.assertEqual(codec.name, "PCMA")
         self.assertEqual(codec.sample_rate, 8000)
         self.assertEqual(codec.samples_per_frame, 160)
+
+
+class G711ReferenceTest(TestCase):
+    """The table-driven codecs must stay bit-exact vs the per-sample transforms."""
+
+    def test_ulaw_encode_exhaustive(self) -> None:
+        pcm = struct.pack("<65536h", *range(-32768, 32768))
+        expected = bytes(_ulaw_encode_sample(s) for s in range(-32768, 32768))
+        self.assertEqual(PcmuCodec().encode(pcm), expected)
+
+    def test_ulaw_decode_exhaustive(self) -> None:
+        payload = bytes(range(256))
+        expected = struct.pack("<256h", *(_ulaw_decode_sample(b) for b in range(256)))
+        self.assertEqual(PcmuCodec().decode(payload), expected)
+
+    def test_alaw_encode_exhaustive(self) -> None:
+        pcm = struct.pack("<65536h", *range(-32768, 32768))
+        expected = bytes(_alaw_encode_sample(s) for s in range(-32768, 32768))
+        self.assertEqual(PcmaCodec().encode(pcm), expected)
+
+    def test_alaw_decode_exhaustive(self) -> None:
+        payload = bytes(range(256))
+        expected = struct.pack("<256h", *(_alaw_decode_sample(b) for b in range(256)))
+        self.assertEqual(PcmaCodec().decode(payload), expected)
+
+    def test_encode_empty(self) -> None:
+        self.assertEqual(PcmuCodec().encode(b""), b"")
+        self.assertEqual(PcmaCodec().encode(b""), b"")
+
+    def test_decode_empty(self) -> None:
+        self.assertEqual(PcmuCodec().decode(b""), b"")
+        self.assertEqual(PcmaCodec().decode(b""), b"")
+
+    def test_encode_truncates_trailing_odd_byte(self) -> None:
+        pcm = struct.pack("<2h", 1000, -1000)
+        self.assertEqual(PcmuCodec().encode(pcm + b"\x7f"), PcmuCodec().encode(pcm))
 
 
 class L16CodecTest(TestCase):

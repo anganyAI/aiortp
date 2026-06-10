@@ -9,7 +9,8 @@ Note the historical RFC 3551 quirk: the RTP clock rate is 8000 Hz even
 though the actual audio is sampled at 16000 Hz.
 """
 
-import struct
+import sys
+from array import array
 
 from .base import Codec
 
@@ -19,6 +20,8 @@ try:
     _HAS_G722 = True
 except ImportError:
     _HAS_G722 = False
+
+_IS_BIG_ENDIAN = sys.byteorder == "big"
 
 
 class G722Codec(Codec):
@@ -57,9 +60,14 @@ class G722Codec(Codec):
         Returns:
             G.722 encoded bytes (160 bytes per frame).
         """
-        num_samples = len(pcm) // 2
-        samples = struct.unpack(f"<{num_samples}h", pcm[: num_samples * 2])
-        return self._encoder.encode(tuple(samples))
+        # The C extension consumes any native-order 16-bit buffer directly,
+        # so hand it an int16 view instead of boxing every sample.
+        samples = array("h")
+        samples.frombytes(pcm[: len(pcm) // 2 * 2])
+        if _IS_BIG_ENDIAN:
+            samples.byteswap()
+        encoded: bytes = self._encoder.encode(samples)
+        return encoded
 
     def decode(self, payload: bytes) -> bytes:
         """Decode G.722 payload to s16le PCM.
@@ -70,6 +78,10 @@ class G722Codec(Codec):
         Returns:
             Raw PCM-16 LE audio bytes (320 samples = 640 bytes per frame).
         """
+        # The C extension returns an array("h") of native-order samples;
+        # tobytes() emits them without re-boxing each one through struct.
         decoded = self._decoder.decode(payload)
-        num_samples = len(decoded)
-        return struct.pack(f"<{num_samples}h", *decoded)
+        if _IS_BIG_ENDIAN:
+            decoded.byteswap()
+        pcm: bytes = decoded.tobytes()
+        return pcm

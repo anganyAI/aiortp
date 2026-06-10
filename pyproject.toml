@@ -30,7 +30,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-g722 = ["G722>=1.2"]
+g722 = ["G722>=1.2.3"]  # 1.2.3+ accepts int16 buffers and returns array("h")
 opus = ["opuslib"]
 dev = [
     "pytest>=8.0",

@@ -98,6 +98,15 @@ class TestG722EncodeDecode:
         recov_energy = sum(s * s for s in recovered) / n
         assert recov_energy > orig_energy * 0.1, "Signal energy too low after roundtrip"
 
+    def test_encode_empty(self) -> None:
+        codec = G722Codec()
+        assert codec.encode(b"") == b""
+
+    def test_encode_truncates_trailing_odd_byte(self) -> None:
+        codec = G722Codec()
+        pcm = struct.pack("<4h", 1000, -1000, 500, -500)
+        assert codec.encode(pcm + b"\x7f") == G722Codec().encode(pcm)
+
     def test_encode_partial_frame(self) -> None:
         """Encoding fewer than 320 samples should still work."""
         codec = G722Codec()
