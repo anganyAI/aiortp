@@ -24,17 +24,26 @@ def _is_stun(data: bytes) -> bool:
 def _stun_binding_response(request: bytes, addr: tuple[str, int]) -> bytes:
     """Build a minimal STUN Binding Success Response (RFC 5389).
 
-    Includes only the XOR-MAPPED-ADDRESS attribute so that the remote
-    ICE agent can confirm connectivity.
+    Includes only the XOR-MAPPED-ADDRESS attribute (no MESSAGE-INTEGRITY),
+    enough for simple connectivity probes but not a full ICE agent.
     """
     # Transaction ID is bytes 8..20 of the request
     txn_id = request[8:20]
 
-    # XOR-MAPPED-ADDRESS (type 0x0020)
-    ip_int = int.from_bytes(socket.inet_aton(addr[0]), "big")
+    # XOR-MAPPED-ADDRESS (type 0x0020); IPv6 XORs with magic || txn_id
+    if ":" in addr[0]:
+        family = 0x02
+        # Zone-id ("fe80::1%eth0") is not part of the wire format and
+        # inet_pton rejects it on Linux
+        raw = socket.inet_pton(socket.AF_INET6, addr[0].split("%")[0])
+        xor_key = pack("!I", _STUN_MAGIC) + txn_id
+    else:
+        family = 0x01
+        raw = socket.inet_aton(addr[0])
+        xor_key = pack("!I", _STUN_MAGIC)
+    xaddr = bytes(b ^ k for b, k in zip(raw, xor_key, strict=True))
     xport = addr[1] ^ (_STUN_MAGIC >> 16)
-    xaddr = ip_int ^ _STUN_MAGIC
-    attr = pack("!HH BBH I", 0x0020, 8, 0, 0x01, xport, xaddr)
+    attr = pack("!HHBBH", 0x0020, 4 + len(xaddr), 0, family, xport) + xaddr
 
     # Header: type 0x0101 (Binding Success), length, magic, txn_id
     header = pack("!HHI", 0x0101, len(attr), _STUN_MAGIC) + txn_id
