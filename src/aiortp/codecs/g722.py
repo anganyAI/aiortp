@@ -60,8 +60,8 @@ class G722Codec(Codec):
         Returns:
             G.722 encoded bytes (160 bytes per frame).
         """
-        # The C extension consumes any native-order 16-bit buffer directly,
-        # so hand it an int16 view instead of boxing every sample.
+        # The C extension consumes any native-order 16-bit buffer directly —
+        # no per-sample boxing on the Python side.
         samples = array("h")
         samples.frombytes(pcm[: len(pcm) // 2 * 2])
         if _IS_BIG_ENDIAN:
@@ -79,7 +79,7 @@ class G722Codec(Codec):
             Raw PCM-16 LE audio bytes (320 samples = 640 bytes per frame).
         """
         # The C extension returns an array("h") of native-order samples;
-        # tobytes() emits them without re-boxing each one through struct.
+        # tobytes() emits them in a single C-speed pass.
         decoded = self._decoder.decode(payload)
         if _IS_BIG_ENDIAN:
             decoded.byteswap()
