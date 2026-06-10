@@ -14,13 +14,14 @@ Portions derived from [aiortc](https://github.com/aiortc/aiortc) by Jeremy Lain�
 - **AsyncIO native** — built on `asyncio.DatagramProtocol`
 - **Audio codecs** — G.711 µ-law/A-law, L16, G.722 (`pip install aiortp[g722]`), Opus (`pip install aiortp[opus]`)
 - **Video codecs** — H.264 (RFC 6184), VP8 (RFC 7741), VP9 (RFC 9628) depacketization/packetization
-- **RTCP** — Sender Reports (with real RTP timestamps), Receiver Reports, SDES, BYE, PLI, NACK
+- **RTCP** — Sender Reports (with real RTP timestamps), Receiver Reports, SDES, BYE, PLI, NACK (retransmission on by default for video, opt-in for audio via `nack_retransmit=True`)
 - **DTMF** — RFC 4733 telephone-event send/receive with redundant end packets
 - **Jitter buffer** — reordering for both audio (timestamp boundaries) and video (marker-bit frame detection)
 - **Packet loss concealment** — confirmed-lost audio replaced with native Opus PLC or generic fade-out repetition, keeping the delivered stream temporally continuous
 - **Auto-timestamps** — optional automatic RTP timestamp generation for audio and video
 - **Port allocation** — `PortAllocator` for managed even/odd RTP/RTCP port pairs
-- **STUN** — inline Binding Response for basic ICE connectivity
+- **STUN** — inline Binding Responses (IPv4/IPv6, no MESSAGE-INTEGRITY) for simple connectivity probes — not a full ICE agent
+- **Symmetric RTP** — opt-in remote address latching from inbound packets (RFC 4961) for NAT traversal
 - **Fully typed** — PEP 561 `py.typed` marker included
 
 ## Installation
