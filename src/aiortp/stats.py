@@ -73,7 +73,7 @@ class StreamStatistics:
             self.base_seq = packet.sequence_number
 
         if in_order:
-            arrival = int(time.time() * self._clockrate)
+            arrival = int(time.monotonic() * self._clockrate)
 
             if self.max_seq is not None and packet.sequence_number < self.max_seq:
                 self.cycles += 1 << 16
