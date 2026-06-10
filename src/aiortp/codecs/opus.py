@@ -4,9 +4,10 @@ from .base import Codec
 
 try:
     import opuslib  # type: ignore[import-untyped]
+    import opuslib.api.decoder  # type: ignore[import-untyped]  # low-level API for native PLC
 
     _HAS_OPUS = True
-except ImportError:
+except Exception:  # noqa: BLE001 — opuslib raises a plain Exception when libopus is missing
     _HAS_OPUS = False
 
 
@@ -42,3 +43,24 @@ class OpusCodec(Codec):
     def decode(self, payload: bytes) -> bytes:
         """Decode Opus to s16le PCM."""
         return self._decoder.decode(payload, self._samples_per_frame)
+
+    def conceal(self, num_samples: int) -> bytes:
+        """Generate concealment PCM using native libopus PLC.
+
+        libopus synthesizes one frame per NULL-payload decode call, so the
+        requested duration is rounded to whole frames.  The high-level
+        ``opuslib.Decoder`` rejects ``None`` payloads, hence the low-level
+        API call.
+        """
+        frames = max(1, round(num_samples / self._samples_per_frame))
+        return b"".join(
+            opuslib.api.decoder.decode(
+                self._decoder.decoder_state,
+                None,
+                0,
+                self._samples_per_frame,
+                False,
+                self._channels,
+            )
+            for _ in range(frames)
+        )

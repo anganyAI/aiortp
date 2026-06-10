@@ -1,4 +1,5 @@
 import struct
+import unittest
 from unittest import TestCase
 
 from aiortp.codecs import PayloadType, get_codec
@@ -10,6 +11,7 @@ from aiortp.codecs.g711 import (
     _ulaw_decode_sample,
     _ulaw_encode_sample,
 )
+from aiortp.codecs.opus import _HAS_OPUS, OpusCodec
 from aiortp.codecs.pcm import L16Codec
 
 
@@ -51,6 +53,10 @@ class PcmuCodecTest(TestCase):
         self.assertEqual(codec.name, "PCMU")
         self.assertEqual(codec.sample_rate, 8000)
         self.assertEqual(codec.samples_per_frame, 160)
+
+    def test_conceal_returns_none(self) -> None:
+        # G.711 has no native PLC — callers use the generic concealer
+        self.assertIsNone(PcmuCodec().conceal(160))
 
 
 class PcmaCodecTest(TestCase):
@@ -156,6 +162,21 @@ class L16CodecTest(TestCase):
         self.assertEqual(codec.name, "L16")
         self.assertEqual(codec.sample_rate, 8000)
         self.assertEqual(codec.samples_per_frame, 160)
+
+
+@unittest.skipUnless(_HAS_OPUS, "opuslib/libopus not available")
+class OpusPlcTest(TestCase):
+    def test_conceal_native(self) -> None:
+        codec = OpusCodec(sample_rate=48000, channels=1)
+        pcm = struct.pack("<960h", *([1000] * 960))
+        codec.decode(codec.encode(pcm))  # warm decoder state
+        concealed = codec.conceal(960)
+        self.assertEqual(len(concealed), 1920)  # one 20 ms frame, s16le mono
+
+    def test_conceal_rounds_to_whole_frames(self) -> None:
+        codec = OpusCodec(sample_rate=48000, channels=1)
+        codec.decode(codec.encode(b"\x00\x00" * 960))
+        self.assertEqual(len(codec.conceal(1920)), 2 * 1920)
 
 
 class RegistryTest(TestCase):
