@@ -578,3 +578,75 @@ class TestSymmetricRtp:
 
         await session_a.close()
         await session_b.close()
+
+
+def test_playout_and_paced_require_codec() -> None:
+    with pytest.raises(RuntimeError):
+        RTPSession(payload_type=0, playout=True)
+    with pytest.raises(RuntimeError):
+        RTPSession(payload_type=0, paced=True)
+
+
+@pytest.mark.asyncio
+async def test_send_audio_explicit_ts_raises_in_paced_mode() -> None:
+    session = await RTPSession.create(
+        local_addr=("127.0.0.1", 0),
+        remote_addr=("127.0.0.1", 9),
+        payload_type=0,
+        rtcp_interval=60.0,
+        paced=True,
+    )
+    try:
+        with pytest.raises(RuntimeError):
+            session.send_audio(b"\x00" * 160, timestamp=0)
+        with pytest.raises(RuntimeError):
+            session.send_audio_pcm(b"\x00" * 320, timestamp=0)
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_paced_to_playout_loopback() -> None:
+    """Paced sender feeds a clocked playout receiver end to end."""
+    session_a = await RTPSession.create(
+        local_addr=("127.0.0.1", 0),
+        remote_addr=("127.0.0.1", 0),
+        payload_type=0,
+        rtcp_interval=60.0,
+        paced=True,
+    )
+    a_addr = session_a._rtp_transport._transport.get_extra_info("sockname")  # type: ignore[union-attr]
+    session_b = await RTPSession.create(
+        local_addr=("127.0.0.1", 0),
+        remote_addr=a_addr,
+        payload_type=0,
+        rtcp_interval=60.0,
+        playout=True,
+    )
+    b_addr = session_b._rtp_transport._transport.get_extra_info("sockname")  # type: ignore[union-attr]
+    session_a.update_remote(b_addr)
+
+    received: list[tuple[bytes, int]] = []
+    session_b.on_audio = lambda pcm, ts: received.append((pcm, ts))
+
+    pcm = struct.pack("<160h", *([2000] * 160))
+    for _ in range(10):
+        session_a.send_audio_pcm_auto(pcm)
+
+    await asyncio.wait_for(session_a.drain(), timeout=2.0)  # ~200 ms of pacing
+    await asyncio.sleep(0.30)  # playout depth + tail concealment + suspension
+
+    # 10 real frames, possibly minus startup and plus tail concealment
+    assert len(received) >= 8
+    assert all(len(p) == 320 for p, _ in received)  # every tick is 20 ms of PCM
+    timestamps = [ts for _, ts in received]
+    deltas = [(b - a) & 0xFFFFFFFF for a, b in zip(timestamps, timestamps[1:], strict=False)]
+    assert all(d % 160 == 0 for d in deltas)  # delivery stays on the ptime grid
+
+    assert session_a.stats["paced_sent"] == 10
+    stats_b = session_b.stats
+    assert "playout_delay_ms" in stats_b
+    assert "playout_target_ms" in stats_b
+
+    await session_a.close()
+    await session_b.close()

@@ -5,10 +5,12 @@ from importlib.metadata import version as _version
 __version__ = _version("aiortp")
 
 from .audio import AudioFrame
+from .clock import MediaClock
 from .codecs import Codec, PayloadType, get_codec, register_codec
 from .dtmf import DtmfEvent, DtmfReceiver, DtmfSender
 from .h264 import H264Depacketizer, H264Packetizer, is_keyframe_nal
 from .jitterbuffer import JitterBuffer, JitterFrame
+from .pacer import PacedSender
 from .packet import (
     RtcpByePacket,
     RtcpPacket,
@@ -18,6 +20,7 @@ from .packet import (
     RtpPacket,
     is_rtcp,
 )
+from .playout import AdaptivePlayout
 from .plc import PcmConcealer
 from .port_allocator import PortAllocator
 from .session import RTPSession
@@ -29,6 +32,7 @@ from .vp9 import VP9Depacketizer, VP9Packetizer, is_keyframe_vp9
 
 __all__ = [
     "__version__",
+    "AdaptivePlayout",
     "AudioFrame",
     "Codec",
     "DtmfEvent",
@@ -38,7 +42,9 @@ __all__ = [
     "H264Packetizer",
     "JitterBuffer",
     "JitterFrame",
+    "MediaClock",
     "NackGenerator",
+    "PacedSender",
     "PayloadType",
     "PcmConcealer",
     "PortAllocator",

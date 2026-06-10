@@ -5,9 +5,11 @@ from collections.abc import Callable
 from typing import Any
 
 from .base_session import BaseRTPSession
+from .clock import MediaClock
 from .codecs import Codec, get_codec
 from .dtmf import DtmfReceiver, DtmfSender
 from .jitterbuffer import JitterBuffer
+from .pacer import PacedSender
 from .packet import (
     RTCP_RTPFB_NACK,
     RtcpByePacket,
@@ -17,6 +19,7 @@ from .packet import (
     RtcpSrPacket,
     RtpPacket,
 )
+from .playout import AdaptivePlayout
 from .plc import PcmConcealer
 from .port_allocator import PortAllocator
 
@@ -37,6 +40,9 @@ class RTPSession(BaseRTPSession):
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
         plc: bool = True,
+        playout: bool = False,
+        playout_max_delay_ms: int = 200,
+        paced: bool = False,
         nack_retransmit: bool = False,
         symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
@@ -51,22 +57,38 @@ class RTPSession(BaseRTPSession):
             symmetric_rtp=symmetric_rtp,
             port_allocator=port_allocator,
         )
+        if (playout or paced) and codec is None:
+            raise RuntimeError("playout and paced modes require a codec")
         self._codec = codec
         self._dtmf_payload_type = dtmf_payload_type
 
-        # Receiver
+        # Receiver — in playout mode the buffering depth lives in
+        # AdaptivePlayout; the jitter buffer only reorders and assembles.
+        self._playout = (
+            AdaptivePlayout(codec, max_delay_ms=playout_max_delay_ms)
+            if playout and codec is not None
+            else None
+        )
+        self._playout_clock: MediaClock | None = None
         self._jitter_buffer = JitterBuffer(
             capacity=jitter_capacity,
-            prefetch=jitter_prefetch,
-            skip_audio_gaps=skip_audio_gaps,
+            prefetch=0 if playout else jitter_prefetch,
+            skip_audio_gaps=skip_audio_gaps or playout,
         )
 
-        # Packet loss concealment — effective when the jitter buffer skips
-        # confirmed-lost packets (skip_audio_gaps) and a codec is configured.
+        # Packet loss concealment for the arrival-driven path — in playout
+        # mode concealment is deadline-based inside AdaptivePlayout instead.
         self._concealer = (
-            PcmConcealer(sample_rate=codec.sample_rate) if plc and codec is not None else None
+            PcmConcealer(sample_rate=codec.sample_rate)
+            if plc and codec is not None and not playout
+            else None
         )
         self._concealed_frames = 0
+
+        # Paced sending (instantiated in create, needs the RtpSender)
+        self._paced = paced
+        self._paced_sender: PacedSender | None = None
+        self._pacer_clock: MediaClock | None = None
 
         # Callbacks
         self.on_audio: Callable[[bytes, int], None] | None = None
@@ -98,6 +120,9 @@ class RTPSession(BaseRTPSession):
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
         plc: bool = True,
+        playout: bool = False,
+        playout_max_delay_ms: int = 200,
+        paced: bool = False,
         nack_retransmit: bool = False,
         symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
@@ -118,6 +143,9 @@ class RTPSession(BaseRTPSession):
             jitter_prefetch=jitter_prefetch,
             skip_audio_gaps=skip_audio_gaps,
             plc=plc,
+            playout=playout,
+            playout_max_delay_ms=playout_max_delay_ms,
+            paced=paced,
             nack_retransmit=nack_retransmit,
             symmetric_rtp=symmetric_rtp,
             port_allocator=port_allocator,
@@ -135,6 +163,21 @@ class RTPSession(BaseRTPSession):
         if session._codec is not None and session._sender is not None:
             session._sender.timestamp_increment = session._codec.samples_per_frame
 
+        # Media clocks (require a running loop)
+        if session._playout is not None:
+            session._playout_clock = MediaClock(session._playout.ptime, session._playout_tick)
+            session._playout_clock.start()
+        if paced and session._sender is not None:
+            session._paced_sender = PacedSender(
+                session._sender,
+                get_addr=lambda: session._remote_addr,
+            )
+            session._pacer_clock = MediaClock(
+                codec.samples_per_frame / codec.sample_rate,
+                session._paced_sender.tick,
+            )
+            session._pacer_clock.start()
+
         return session
 
     def _handle_rtp(self, data: bytes, addr: tuple[str, int]) -> None:
@@ -150,6 +193,10 @@ class RTPSession(BaseRTPSession):
 
         # Check for DTMF
         if packet.payload_type == self._dtmf_payload_type:
+            if self._playout is not None:
+                # RFC 4733 packets replace audio while a digit is sent —
+                # sender suppression, not loss
+                self._playout.suppress()
             self._dtmf_receiver.handle_packet(packet)
             return
 
@@ -157,27 +204,35 @@ class RTPSession(BaseRTPSession):
         if packet.ssrc != self._remote_ssrc:
             self._remote_ssrc_changed(packet.ssrc)
             self._jitter_buffer.reset()
+            if self._playout is not None:
+                self._playout.reset()
 
         assert self._stream_stats is not None
         self._stream_stats.add(packet)
 
         # Add to jitter buffer
         pli_flag, frame = self._jitter_buffer.add(packet)
+        if frame is None:
+            return
+        if self._playout is not None:
+            self._playout.put(frame.timestamp, frame.data)
+            return
+        if self.on_audio is None:
+            return
 
-        if frame is not None and self.on_audio is not None:
-            # Decode if we have a codec
-            audio_data = frame.data
-            if self._codec is not None:
-                try:
-                    audio_data = self._codec.decode(frame.data)
-                except Exception:
-                    logger.warning("Failed to decode audio frame")
-                    return
-                if self._concealer is not None:
-                    if frame.lost:
-                        self._conceal_lost(frame.lost, frame.timestamp)
-                    self._concealer.update(audio_data)
-            self.on_audio(audio_data, frame.timestamp)
+        # Decode if we have a codec
+        audio_data = frame.data
+        if self._codec is not None:
+            try:
+                audio_data = self._codec.decode(frame.data)
+            except Exception:
+                logger.warning("Failed to decode audio frame")
+                return
+            if self._concealer is not None:
+                if frame.lost:
+                    self._conceal_lost(frame.lost, frame.timestamp)
+                self._concealer.update(audio_data)
+        self.on_audio(audio_data, frame.timestamp)
 
     def _conceal_lost(self, lost: int, next_timestamp: int) -> None:
         """Deliver concealment PCM covering *lost* packets before *next_timestamp*.
@@ -197,6 +252,13 @@ class RTPSession(BaseRTPSession):
         self._concealed_frames += lost
         timestamp = (next_timestamp - lost * self._codec.samples_per_frame) & 0xFFFFFFFF
         self.on_audio(pcm, timestamp)
+
+    def _playout_tick(self) -> None:
+        """Deliver one ptime of audio from the adaptive playout buffer."""
+        assert self._playout is not None
+        frame = self._playout.tick()
+        if frame is not None and self.on_audio is not None:
+            self.on_audio(frame[0], frame[1])
 
     def _handle_rtcp(self, data: bytes, addr: tuple[str, int]) -> None:
         """Handle incoming RTCP packet."""
@@ -221,6 +283,8 @@ class RTPSession(BaseRTPSession):
 
     def send_audio(self, payload: bytes, timestamp: int) -> None:
         """Send encoded audio payload (already codec-encoded)."""
+        if self._paced_sender is not None:
+            raise RuntimeError("paced mode owns timestamps; use send_audio_auto")
         if self._sender is None or self._closed:
             return
         self._sender.send_frame(payload, timestamp, addr=self._remote_addr)
@@ -228,11 +292,20 @@ class RTPSession(BaseRTPSession):
     def send_audio_auto(self, payload: bytes) -> int:
         """Send encoded audio with auto-incrementing timestamp.
 
-        Returns the RTP timestamp used.
+        Returns the RTP timestamp used, or 0 in paced mode where the
+        pacer assigns timestamps at transmission time.
         """
         if self._sender is None or self._closed:
             return 0
+        if self._paced_sender is not None:
+            self._paced_sender.enqueue(payload)
+            return 0
         return self._sender.send_frame_auto(payload, addr=self._remote_addr)
+
+    async def drain(self) -> None:
+        """Wait until the paced send queue is fully transmitted (no-op unpaced)."""
+        if self._paced_sender is not None:
+            await self._paced_sender.drain()
 
     def send_audio_pcm(self, pcm: bytes, timestamp: int) -> None:
         """Send raw PCM audio, encoding with session codec."""
@@ -264,9 +337,21 @@ class RTPSession(BaseRTPSession):
         """The codec used by this session, or ``None`` if not configured."""
         return self._codec
 
+    async def close(self) -> None:
+        """Stop the media clocks, then close transports and RTCP."""
+        if self._playout_clock is not None:
+            await self._playout_clock.stop()
+        if self._pacer_clock is not None:
+            await self._pacer_clock.stop()
+        await super().close()
+
     @property
     def stats(self) -> dict[str, Any]:
         """Session statistics, including receiver-side concealment."""
         result = super().stats
         result["concealed_frames"] = self._concealed_frames
+        if self._playout is not None:
+            result.update(self._playout.stats())
+        if self._paced_sender is not None:
+            result.update(self._paced_sender.stats())
         return result
