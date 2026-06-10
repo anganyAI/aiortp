@@ -20,7 +20,6 @@ as 20 ms RTP frames (160 samples each) with proper real-time pacing.
 
 import argparse
 import asyncio
-import struct
 import sys
 import wave
 
@@ -56,11 +55,13 @@ async def send_wav(wav_path: str, dest_host: str, dest_port: int) -> None:
     print(f"  Format: {sample_rate} Hz, 16-bit mono PCM")
     print(f"  Duration: {duration_sec:.2f}s ({n_frames} samples)")
 
-    # Create RTP session
+    # Create RTP session with paced sending: frames are queued and
+    # transmitted one per 20 ms by the session's media clock
     session = await RTPSession.create(
         local_addr=("0.0.0.0", 0),
         remote_addr=(dest_host, dest_port),
         payload_type=PayloadType.PCMU,
+        paced=True,
     )
 
     local_addr = session._rtp_transport._transport.get_extra_info("sockname")
@@ -68,29 +69,17 @@ async def send_wav(wav_path: str, dest_host: str, dest_port: int) -> None:
     print(f"  Sending to   {dest_host}:{dest_port}")
     print()
 
-    # Send audio in 20 ms frames (160 samples = 320 bytes of s16le PCM)
+    # Queue audio in 20 ms frames (160 samples = 320 bytes of s16le PCM);
+    # the paced sender transmits them in real time
     samples_per_frame = 160
     frame_size = samples_per_frame * 2  # 2 bytes per sample (s16le)
-    frame_duration = samples_per_frame / sample_rate  # 0.02s = 20ms
     total_frames = len(pcm_data) // frame_size
-    timestamp = 0
 
-    print(f"Streaming {total_frames} frames ({frame_duration * 1000:.0f} ms each) ...")
+    print(f"Streaming {total_frames} frames (20 ms each) ...")
 
     for i in range(total_frames):
         offset = i * frame_size
-        frame_pcm = pcm_data[offset : offset + frame_size]
-
-        session.send_audio_pcm(frame_pcm, timestamp=timestamp)
-        timestamp += samples_per_frame
-
-        # Real-time pacing: sleep ~20 ms between frames
-        await asyncio.sleep(frame_duration)
-
-        # Progress indicator every second
-        if (i + 1) % 50 == 0:
-            elapsed = (i + 1) * frame_duration
-            print(f"  Sent {elapsed:.1f}s / {duration_sec:.1f}s")
+        session.send_audio_pcm_auto(pcm_data[offset : offset + frame_size])
 
     # Handle remaining samples (partial last frame, if any)
     remaining = len(pcm_data) - total_frames * frame_size
@@ -98,7 +87,10 @@ async def send_wav(wav_path: str, dest_host: str, dest_port: int) -> None:
         # Pad to a full frame with silence
         last_pcm = pcm_data[total_frames * frame_size :]
         last_pcm += b"\x00" * (frame_size - remaining)
-        session.send_audio_pcm(last_pcm, timestamp=timestamp)
+        session.send_audio_pcm_auto(last_pcm)
+
+    # Real-time pacing happens here: wait until the queue is transmitted
+    await session.drain()
 
     print(f"\nDone! Sent {total_frames} frames ({duration_sec:.2f}s of audio).")
     print(f"Stats: {session.stats}")

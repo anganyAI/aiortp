@@ -17,6 +17,8 @@ Portions derived from [aiortc](https://github.com/aiortc/aiortc) by Jeremy Lain�
 - **RTCP** — Sender Reports (with real RTP timestamps), Receiver Reports, SDES, BYE, PLI, NACK (retransmission on by default for video, opt-in for audio via `nack_retransmit=True`)
 - **DTMF** — RFC 4733 telephone-event send/receive with redundant end packets
 - **Jitter buffer** — reordering for both audio (timestamp boundaries) and video (marker-bit frame detection)
+- **Adaptive clocked playout** — opt-in `playout=True`: audio delivered on a steady 20 ms media clock from an adaptive jitter buffer that follows measured network jitter
+- **Paced sending** — opt-in `paced=True`: outgoing frames queued and transmitted one per ptime, silence encoded as timestamp jumps, `await session.drain()`
 - **Packet loss concealment** — confirmed-lost audio replaced with native Opus PLC or generic fade-out repetition, keeping the delivered stream temporally continuous
 - **Auto-timestamps** — optional automatic RTP timestamp generation for audio and video
 - **Port allocation** — `PortAllocator` for managed even/odd RTP/RTCP port pairs
@@ -143,6 +145,40 @@ session = await RTPSession.create(
 )
 
 print(session.stats["concealed_frames"])  # packets replaced by concealment
+```
+
+## Clocked Playout & Paced Sending
+
+With `playout=True`, `on_audio` fires on a steady ptime clock (20 ms ticks)
+instead of on packet arrival. Frames wait in an adaptive playout buffer whose
+target depth follows measured network jitter (bounded by
+`playout_max_delay_ms`, default 200 ms): sustained jitter grows the buffer by
+inserting a concealment frame, calm networks shrink it by dropping one.
+Missing frames are concealed at their deadline (native Opus PLC or fade-out);
+after 120 ms of continuous concealment the gap is treated as a sender pause
+(DTX, hold, DTMF) and delivery suspends until the stream resumes.
+
+With `paced=True`, `send_audio_auto` / `send_audio_pcm_auto` enqueue frames
+and the session transmits one per ptime on its media clock — push faster than
+real time (e.g. a whole file) and the wire stays correctly paced. Silence is
+a timestamp jump, not stale packets.
+
+```python
+session = await RTPSession.create(
+    local_addr=("0.0.0.0", 10000),
+    remote_addr=("10.0.0.1", 10000),
+    payload_type=PayloadType.PCMU,
+    playout=True,   # clocked receive: on_audio every 20 ms
+    paced=True,     # clocked send: one frame per 20 ms
+)
+
+session.on_audio = lambda pcm, ts: sink.write(pcm)
+
+for frame in pcm_frames:          # any rate — even all at once
+    session.send_audio_pcm_auto(frame)
+await session.drain()             # wait until everything is on the wire
+
+print(session.stats["playout_delay_ms"], session.stats["playout_target_ms"])
 ```
 
 ## Video RTCP Feedback
