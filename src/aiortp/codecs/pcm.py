@@ -1,8 +1,16 @@
 """L16 (Linear 16-bit PCM) codec — s16le ↔ s16be (network byte order) conversion."""
 
-import struct
+from array import array
 
 from .base import Codec
+
+
+def _byteswap16(data: bytes) -> bytes:
+    """Swap the byte order of each 16-bit sample (one C-speed pass)."""
+    samples = array("h")
+    samples.frombytes(data)
+    samples.byteswap()
+    return samples.tobytes()
 
 
 class L16Codec(Codec):
@@ -20,12 +28,8 @@ class L16Codec(Codec):
 
     def encode(self, pcm: bytes) -> bytes:
         """Convert s16le PCM to s16be (network byte order)."""
-        n_samples = len(pcm) // 2
-        samples = struct.unpack(f"<{n_samples}h", pcm)
-        return struct.pack(f">{n_samples}h", *samples)
+        return _byteswap16(pcm)
 
     def decode(self, payload: bytes) -> bytes:
         """Convert s16be (network byte order) to s16le PCM."""
-        n_samples = len(payload) // 2
-        samples = struct.unpack(f">{n_samples}h", payload)
-        return struct.pack(f"<{n_samples}h", *samples)
+        return _byteswap16(payload)

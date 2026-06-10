@@ -137,6 +137,20 @@ class L16CodecTest(TestCase):
         decoded = codec.decode(encoded)
         self.assertEqual(decoded, pcm)
 
+    def test_byte_order(self) -> None:
+        codec = L16Codec()
+        self.assertEqual(codec.encode(b"\x01\x02\x03\x04"), b"\x02\x01\x04\x03")
+        self.assertEqual(codec.decode(b"\x02\x01\x04\x03"), b"\x01\x02\x03\x04")
+
+    def test_empty(self) -> None:
+        codec = L16Codec()
+        self.assertEqual(codec.encode(b""), b"")
+        self.assertEqual(codec.decode(b""), b"")
+
+    def test_odd_length_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            L16Codec().encode(b"\x01\x02\x03")
+
     def test_properties(self) -> None:
         codec = L16Codec()
         self.assertEqual(codec.name, "L16")
