@@ -18,6 +18,7 @@ from .packet import (
     RtpPacket,
     is_rtcp,
 )
+from .plc import PcmConcealer
 from .port_allocator import PortAllocator
 from .session import RTPSession
 from .stats import NackGenerator, StreamStatistics
@@ -39,6 +40,7 @@ __all__ = [
     "JitterFrame",
     "NackGenerator",
     "PayloadType",
+    "PcmConcealer",
     "PortAllocator",
     "RtcpByePacket",
     "RtcpPacket",

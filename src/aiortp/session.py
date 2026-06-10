@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from .base_session import BaseRTPSession
 from .codecs import Codec, get_codec
@@ -16,6 +17,7 @@ from .packet import (
     RtcpSrPacket,
     RtpPacket,
 )
+from .plc import PcmConcealer
 from .port_allocator import PortAllocator
 from .stats import StreamStatistics
 
@@ -35,6 +37,7 @@ class RTPSession(BaseRTPSession):
         jitter_capacity: int = 16,
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
+        plc: bool = True,
         port_allocator: PortAllocator | None = None,
     ) -> None:
         super().__init__(
@@ -54,6 +57,13 @@ class RTPSession(BaseRTPSession):
             prefetch=jitter_prefetch,
             skip_audio_gaps=skip_audio_gaps,
         )
+
+        # Packet loss concealment — effective when the jitter buffer skips
+        # confirmed-lost packets (skip_audio_gaps) and a codec is configured.
+        self._concealer = (
+            PcmConcealer(sample_rate=codec.sample_rate) if plc and codec is not None else None
+        )
+        self._concealed_frames = 0
 
         # Callbacks
         self.on_audio: Callable[[bytes, int], None] | None = None
@@ -77,6 +87,7 @@ class RTPSession(BaseRTPSession):
         jitter_capacity: int = 16,
         jitter_prefetch: int = 4,
         skip_audio_gaps: bool = False,
+        plc: bool = True,
         port_allocator: PortAllocator | None = None,
     ) -> "RTPSession":
         """Async factory to create and bind an RTP session."""
@@ -94,6 +105,7 @@ class RTPSession(BaseRTPSession):
             jitter_capacity=jitter_capacity,
             jitter_prefetch=jitter_prefetch,
             skip_audio_gaps=skip_audio_gaps,
+            plc=plc,
             port_allocator=port_allocator,
         )
         await session._bind_transports(local_addr, remote_addr)
@@ -148,7 +160,30 @@ class RTPSession(BaseRTPSession):
                 except Exception:
                     logger.warning("Failed to decode audio frame")
                     return
+                if self._concealer is not None:
+                    if frame.lost:
+                        self._conceal_lost(frame.lost, frame.timestamp)
+                    self._concealer.update(audio_data)
             self.on_audio(audio_data, frame.timestamp)
+
+    def _conceal_lost(self, lost: int, next_timestamp: int) -> None:
+        """Deliver concealment PCM covering *lost* packets before *next_timestamp*.
+
+        The lost duration is estimated from the last decoded frame, which
+        sidesteps codec clock-rate quirks (G.722).  Codec-native PLC is
+        preferred; the generic concealer covers the rest.
+        """
+        assert self._concealer is not None and self._codec is not None
+        assert self.on_audio is not None
+        samples = lost * self._concealer.frame_samples
+        if samples == 0:
+            return  # no decoded frame yet to anchor concealment
+        pcm = self._codec.conceal(samples)
+        if pcm is None:
+            pcm = self._concealer.conceal(samples)
+        self._concealed_frames += lost
+        timestamp = (next_timestamp - lost * self._codec.samples_per_frame) & 0xFFFFFFFF
+        self.on_audio(pcm, timestamp)
 
     def _handle_rtcp(self, data: bytes) -> None:
         """Handle incoming RTCP packet."""
@@ -222,3 +257,10 @@ class RTPSession(BaseRTPSession):
     def codec(self) -> Codec | None:
         """The codec used by this session, or ``None`` if not configured."""
         return self._codec
+
+    @property
+    def stats(self) -> dict[str, Any]:
+        """Session statistics, including receiver-side concealment."""
+        result = super().stats
+        result["concealed_frames"] = self._concealed_frames
+        return result

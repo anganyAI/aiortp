@@ -17,6 +17,7 @@ Portions derived from [aiortc](https://github.com/aiortc/aiortc) by Jeremy Lain�
 - **RTCP** — Sender Reports (with real RTP timestamps), Receiver Reports, SDES, BYE, PLI, NACK
 - **DTMF** — RFC 4733 telephone-event send/receive with redundant end packets
 - **Jitter buffer** — reordering for both audio (timestamp boundaries) and video (marker-bit frame detection)
+- **Packet loss concealment** — confirmed-lost audio replaced with native Opus PLC or generic fade-out repetition, keeping the delivered stream temporally continuous
 - **Auto-timestamps** — optional automatic RTP timestamp generation for audio and video
 - **Port allocation** — `PortAllocator` for managed even/odd RTP/RTCP port pairs
 - **STUN** — inline Binding Response for basic ICE connectivity
@@ -120,6 +121,27 @@ def on_dtmf(digit: str, duration: int) -> None:
     print(f"Got DTMF: {digit}")
 
 session.on_dtmf = on_dtmf
+```
+
+## Packet Loss Concealment
+
+With `skip_audio_gaps=True`, the jitter buffer confirms losses by sequence-number
+analysis (sender pauses such as DTMF or VAD suppression are never treated as loss).
+Confirmed-lost packets are replaced with concealment PCM before `on_audio`, so the
+delivered stream stays temporally continuous — recordings and AEC alignment are
+preserved. Opus uses native libopus PLC; other codecs fall back to a generic
+concealer (last-frame repetition fading to silence over 60 ms, then silence).
+
+```python
+session = await RTPSession.create(
+    local_addr=("0.0.0.0", 10000),
+    remote_addr=("10.0.0.1", 10000),
+    payload_type=PayloadType.PCMU,
+    skip_audio_gaps=True,  # required: loss is confirmed by the jitter buffer
+    plc=True,              # default — set False to skip lost audio silently
+)
+
+print(session.stats["concealed_frames"])  # packets replaced by concealment
 ```
 
 ## Video RTCP Feedback

@@ -1,7 +1,9 @@
 import asyncio
+import struct
 
 import pytest
 
+from aiortp.codecs import get_codec
 from aiortp.packet import (
     RTCP_RTPFB_NACK,
     RtcpPacket,
@@ -9,10 +11,64 @@ from aiortp.packet import (
     RtcpRrPacket,
     RtcpRtpfbPacket,
     RtcpSrPacket,
+    RtpPacket,
 )
 from aiortp.sender import RtpSender
 from aiortp.session import RTPSession
 from aiortp.transport import RtpTransport
+
+
+def _plc_session(plc: bool = True) -> RTPSession:
+    """Session without transports — packets injected via _handle_rtp."""
+    return RTPSession(
+        payload_type=0,
+        codec=get_codec(0),
+        jitter_prefetch=0,
+        skip_audio_gaps=True,
+        plc=plc,
+    )
+
+
+def _inject_pcmu(session: RTPSession, sequences: tuple[int, ...]) -> None:
+    """Inject PCMU packets with 20 ms spacing; missing sequences are lost."""
+    payload = get_codec(0).encode(struct.pack("<160h", *([1000] * 160)))
+    for seq in sequences:
+        packet = RtpPacket(
+            payload_type=0, sequence_number=seq, timestamp=seq * 160, payload=payload
+        )
+        session._handle_rtp(packet.serialize())
+
+
+def test_plc_inserts_concealment_on_loss() -> None:
+    """Lost packets are replaced by concealment PCM, keeping the timeline continuous."""
+    session = _plc_session()
+    received: list[tuple[bytes, int]] = []
+    session.on_audio = lambda pcm, ts: received.append((pcm, ts))
+
+    # seq2 and seq3 lost
+    _inject_pcmu(session, (0, 1, 4, 5))
+
+    assert [ts for _, ts in received] == [0, 160, 320, 640]
+    concealed = received[2][0]
+    assert len(concealed) == 640  # 2 lost packets × 160 samples × 2 bytes
+    # Concealment repeats the last frame (faded), not silence
+    first_sample = struct.unpack_from("<h", concealed)[0]
+    assert abs(first_sample) > 500
+    # Delivered sample count covers the full timeline, loss included
+    assert sum(len(pcm) for pcm, _ in received) == 5 * 320
+    assert session.stats["concealed_frames"] == 2
+
+
+def test_plc_disabled_skips_lost_audio() -> None:
+    """With plc=False the lost duration simply disappears from the stream."""
+    session = _plc_session(plc=False)
+    received: list[tuple[bytes, int]] = []
+    session.on_audio = lambda pcm, ts: received.append((pcm, ts))
+
+    _inject_pcmu(session, (0, 1, 4, 5))
+
+    assert [ts for _, ts in received] == [0, 160, 640]
+    assert session.stats["concealed_frames"] == 0
 
 
 @pytest.mark.asyncio
