@@ -384,27 +384,61 @@ class AudioGapHandlingTest(TestCase):
         self.assertEqual(frame.data, b"A")
         self.assertEqual(frame.timestamp, 100)
 
-    def test_multiple_consecutive_gaps_limited(self) -> None:
-        """More than MAX_AUDIO_GAP consecutive gaps → stop scanning."""
+    def test_long_burst_confirmed_and_skipped(self) -> None:
+        """A multi-packet loss burst is confirmed and skipped in one pass."""
         jbuffer = JitterBuffer(capacity=16, prefetch=0, skip_audio_gaps=True)
 
-        # seq0 arrives, then 4 consecutive losses (exceeds MAX_AUDIO_GAP=3)
+        # seq0 arrives, then 4 consecutive losses
         jbuffer.add(RtpPacket(sequence_number=0, timestamp=100, payload=b"A"))
         # seq1, seq2, seq3, seq4 all lost — gap of 4
 
-        # seq5 arrives but gap is too large to scan past
+        # seq5 confirms the burst → seq0 delivered, nothing lost before it
         _, frame = jbuffer.add(RtpPacket(sequence_number=5, timestamp=600, payload=b"F"))
-        self.assertIsNone(frame)
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame.data, b"A")
+        self.assertEqual(frame.lost, 0)
+
+        # seq6 delivers seq5, reporting the 4-packet burst before it
+        _, frame = jbuffer.add(RtpPacket(sequence_number=6, timestamp=700, payload=b"G"))
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame.data, b"F")
+        self.assertEqual(frame.timestamp, 600)
+        self.assertEqual(frame.lost, 4)
+
+    def test_lost_count_reported_on_single_gap(self) -> None:
+        """The frame following a skipped gap reports the lost packet count."""
+        jbuffer = JitterBuffer(capacity=16, prefetch=0, skip_audio_gaps=True)
+
+        jbuffer.add(RtpPacket(sequence_number=0, timestamp=100, payload=b"A"))
+        # seq1 lost
+        _, frame = jbuffer.add(RtpPacket(sequence_number=2, timestamp=300, payload=b"C"))
+        self.assertEqual(frame.lost, 0)  # seq0 has nothing lost before it
+
+        _, frame = jbuffer.add(RtpPacket(sequence_number=3, timestamp=400, payload=b"D"))
+        self.assertEqual(frame.data, b"C")
+        self.assertEqual(frame.lost, 1)  # seq1 was lost before seq2
+
+    def test_lost_zero_without_gap(self) -> None:
+        """Continuous delivery reports lost=0 on every frame."""
+        jbuffer = JitterBuffer(capacity=16, prefetch=0, skip_audio_gaps=True)
+
+        jbuffer.add(RtpPacket(sequence_number=0, timestamp=100, payload=b"A"))
+        for seq in range(1, 4):
+            _, frame = jbuffer.add(
+                RtpPacket(sequence_number=seq, timestamp=100 + seq * 100, payload=b"X")
+            )
+            self.assertIsNotNone(frame)
+            self.assertEqual(frame.lost, 0)
 
     def test_no_gap_handling_without_flag(self) -> None:
-        """Without skip_audio_gaps, a gap blocks delivery (original behavior)."""
+        """Without skip_audio_gaps, a gap blocks delivery."""
         jbuffer = JitterBuffer(capacity=16, prefetch=0)
 
         jbuffer.add(RtpPacket(sequence_number=0, timestamp=100, payload=b"A"))
         # seq1 lost
         jbuffer.add(RtpPacket(sequence_number=2, timestamp=300, payload=b"C"))
         _, frame = jbuffer.add(RtpPacket(sequence_number=3, timestamp=400, payload=b"D"))
-        self.assertIsNone(frame)  # blocked by gap — old behavior
+        self.assertIsNone(frame)  # blocked by gap
 
     def test_same_timestamp_gap_not_treated_as_audio_gap(self) -> None:
         """Same-timestamp packets with a gap don't trigger audio frame delivery."""
