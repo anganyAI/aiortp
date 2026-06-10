@@ -1,6 +1,8 @@
 """aiortp — asyncio RTP/RTCP audio library."""
 
-__version__ = "0.3.0"
+from importlib.metadata import version as _version
+
+__version__ = _version("aiortp")
 
 from .audio import AudioFrame
 from .codecs import Codec, PayloadType, get_codec, register_codec
