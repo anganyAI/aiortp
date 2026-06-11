@@ -20,6 +20,7 @@ Portions derived from [aiortc](https://github.com/aiortc/aiortc) by Jeremy Lain�
 - **Adaptive clocked playout** — opt-in `playout=True`: audio delivered on a steady 20 ms media clock from an adaptive jitter buffer that follows measured network jitter
 - **Paced sending** — opt-in `paced=True`: outgoing frames queued and transmitted one per ptime, silence encoded as timestamp jumps, `await session.drain()`
 - **Packet loss concealment** — confirmed-lost audio replaced with native Opus PLC or generic fade-out repetition, keeping the delivered stream temporally continuous
+- **Comfort noise (RFC 3389)** — opt-in `cn=True` emission during paced silence (level measured from the stream); PT 13 reception always handled — playout generates the noise, never reads it as loss
 - **Auto-timestamps** — optional automatic RTP timestamp generation for audio and video
 - **Port allocation** — `PortAllocator` for managed even/odd RTP/RTCP port pairs
 - **STUN** — inline Binding Responses (IPv4/IPv6, no MESSAGE-INTEGRITY) for simple connectivity probes — not a full ICE agent
@@ -180,6 +181,25 @@ await session.drain()             # wait until everything is on the wire
 
 print(session.stats["playout_delay_ms"], session.stats["playout_target_ms"])
 ```
+
+### Comfort noise (RFC 3389)
+
+With `cn=True` (requires `paced=True`), entering a silence period — the
+send queue running empty after talk — emits a comfort-noise packet whose
+level is measured from the outgoing stream, refreshed every 3 s while the
+silence lasts. The first audio frame after silence carries the RFC 3551
+talkspurt marker.
+
+Reception is always on, independent of `cn`: PT 13 packets (configurable
+via `cn_payload_type`) consume sequence numbers without ever reading as
+packet loss. In playout mode the silence is filled with generated noise at
+the signalled level from the CN timestamp onward (`cn_frames` in stats),
+falling back to suspension if the sender disappears for 30 s; in
+arrival-driven mode the level is surfaced through `on_cn(level)`.
+
+`OpusCodec(dtx=True)` additionally enables the encoder's DTX flag —
+whether libopus emits DTX frames depends on its mode selection; aiortp's
+silence suppression works through paced mode + CN regardless.
 
 ### Timing characteristics
 
