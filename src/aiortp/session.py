@@ -352,6 +352,8 @@ class RTPSession(BaseRTPSession):
             await self._playout_clock.stop()
         if self._pacer_clock is not None:
             await self._pacer_clock.stop()
+        if self._paced_sender is not None:
+            self._paced_sender.discard()
         await super().close()
 
     @property

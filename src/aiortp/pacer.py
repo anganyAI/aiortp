@@ -45,6 +45,15 @@ class PacedSender:
         """Wait until every queued frame has been transmitted."""
         await self._empty.wait()
 
+    def discard(self) -> None:
+        """Drop queued frames and release drain() waiters.
+
+        Without this, stopping the media clock with a non-empty queue
+        would leave drain() callers waiting forever.
+        """
+        self._queue.clear()
+        self._empty.set()
+
     def tick(self) -> None:
         if not self._queue:
             self._sender.advance_timestamp()

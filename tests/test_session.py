@@ -693,3 +693,19 @@ def test_real_loss_concealed_exactly_next_to_dtmf() -> None:
     assert session.stats["concealed_frames"] == 1  # exactly the dropped packet
     # Timeline stays continuous: concealment PCM fills the seq-14 slot
     assert [ts for _, ts in received] == [0, 160, 320, 13 * 160, 14 * 160, 15 * 160]
+
+
+@pytest.mark.asyncio
+async def test_close_releases_drain_waiters() -> None:
+    """Closing with a non-empty paced queue must not deadlock drain()."""
+    session = await RTPSession.create(
+        local_addr=("127.0.0.1", 0),
+        remote_addr=("127.0.0.1", 9),
+        payload_type=0,
+        rtcp_interval=60.0,
+        paced=True,
+    )
+    for _ in range(50):  # ~1 s of queued audio
+        session.send_audio_auto(b"\x00" * 160)
+    await session.close()
+    await asyncio.wait_for(session.drain(), timeout=0.5)
