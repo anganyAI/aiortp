@@ -6,6 +6,7 @@ __version__ = _version("aiortp")
 
 from .audio import AudioFrame
 from .clock import MediaClock
+from .cn import NoiseGenerator, build_cn_payload, measure_level, parse_cn_payload
 from .codecs import Codec, PayloadType, get_codec, register_codec
 from .dtmf import DtmfEvent, DtmfReceiver, DtmfSender
 from .h264 import H264Depacketizer, H264Packetizer, is_keyframe_nal
@@ -44,6 +45,7 @@ __all__ = [
     "JitterFrame",
     "MediaClock",
     "NackGenerator",
+    "NoiseGenerator",
     "PacedSender",
     "PayloadType",
     "PcmConcealer",
@@ -63,7 +65,10 @@ __all__ = [
     "VP8Packetizer",
     "VP9Depacketizer",
     "VP9Packetizer",
+    "build_cn_payload",
     "get_codec",
+    "measure_level",
+    "parse_cn_payload",
     "is_keyframe_vp8",
     "is_keyframe_vp9",
     "is_keyframe_nal",

@@ -726,3 +726,90 @@ def test_dtmf_packets_counted_in_stream_stats() -> None:
     assert stats is not None
     assert stats.packets_received == 15  # 5 audio + 10 telephone-event
     assert stats.packets_lost == 1  # only the true drop at seq 14
+
+
+def _inject_cn(session: RTPSession, seq: int, level: int = 60, ts: int = 0) -> None:
+    packet = RtpPacket(payload_type=13, sequence_number=seq, timestamp=ts, payload=bytes([level]))
+    session._handle_rtp(packet.serialize(), _ADDR)
+
+
+def test_cn_requires_paced_mode() -> None:
+    with pytest.raises(RuntimeError):
+        RTPSession(payload_type=0, codec=get_codec(0), cn=True)
+
+
+def test_cn_packets_not_counted_as_loss() -> None:
+    """PT 13 packets consume sequence numbers without reading as loss."""
+    session = _plc_session()
+    received: list[tuple[bytes, int]] = []
+    session.on_audio = lambda pcm, ts: received.append((pcm, ts))
+    levels: list[int] = []
+    session.on_cn = lambda level: levels.append(level)
+
+    _inject_pcmu(session, (0, 1, 2))
+    _inject_cn(session, 3, level=55, ts=480)
+    _inject_pcmu(session, (4, 5))
+
+    assert levels == [55]
+    assert session.stats["concealed_frames"] == 0
+    stats = session._stream_stats
+    assert stats is not None
+    assert stats.packets_received == 6
+    assert stats.packets_lost == 0
+    # The CN marker completed the pending ts=320 frame
+    assert [ts for _, ts in received] == [0, 160, 320, 4 * 160]
+
+
+def test_cn_packet_enters_playout_cn_state() -> None:
+    session = RTPSession(payload_type=0, codec=get_codec(0), playout=True)
+    _inject_pcmu(session, (0, 1))
+    _inject_cn(session, 2, level=60, ts=320)
+
+    assert session._playout is not None
+    assert session._playout.tick() is not None  # ts=0, real
+    assert session._playout.tick() is not None  # ts=160, real
+    noise = session._playout.tick()  # ts=320: noise, not concealment
+    assert noise is not None
+    assert session._playout.cn_frames == 1
+    assert session._playout.concealed_frames == 0
+
+
+@pytest.mark.asyncio
+async def test_paced_cn_to_playout_loopback() -> None:
+    """Sender silence produces comfort noise at the receiver, end to end."""
+    session_a = await RTPSession.create(
+        local_addr=("127.0.0.1", 0),
+        remote_addr=("127.0.0.1", 0),
+        payload_type=0,
+        rtcp_interval=60.0,
+        paced=True,
+        cn=True,
+    )
+    a_addr = session_a._rtp_transport._transport.get_extra_info("sockname")  # type: ignore[union-attr]
+    session_b = await RTPSession.create(
+        local_addr=("127.0.0.1", 0),
+        remote_addr=a_addr,
+        payload_type=0,
+        rtcp_interval=60.0,
+        playout=True,
+    )
+    b_addr = session_b._rtp_transport._transport.get_extra_info("sockname")  # type: ignore[union-attr]
+    session_a.update_remote(b_addr)
+
+    received: list[tuple[bytes, int]] = []
+    session_b.on_audio = lambda pcm, ts: received.append((pcm, ts))
+
+    pcm = struct.pack("<160h", *([4000] * 160))
+    for _ in range(5):
+        session_a.send_audio_pcm_auto(pcm)
+    await asyncio.wait_for(session_a.drain(), timeout=2.0)
+    await asyncio.sleep(0.35)  # silence: CN packet + noise generation at B
+
+    assert session_a.stats["cn_sent"] >= 1
+    stats_b = session_b.stats
+    assert stats_b["cn_frames"] > 0  # receiver generated noise during silence
+    assert stats_b["underrun_suspensions"] == 0  # no false dead-sender
+    assert len(received) > 5  # real frames plus noise frames
+
+    await session_a.close()
+    await session_b.close()

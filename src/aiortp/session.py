@@ -6,6 +6,7 @@ from typing import Any
 
 from .base_session import BaseRTPSession
 from .clock import MediaClock
+from .cn import DEFAULT_CN_LEVEL, measure_level, parse_cn_payload
 from .codecs import Codec, get_codec
 from .dtmf import DtmfReceiver, DtmfSender
 from .jitterbuffer import JitterBuffer, JitterFrame
@@ -43,6 +44,8 @@ class RTPSession(BaseRTPSession):
         playout: bool = False,
         playout_max_delay_ms: int = 200,
         paced: bool = False,
+        cn: bool = False,
+        cn_payload_type: int = 13,
         nack_retransmit: bool = False,
         symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
@@ -59,8 +62,13 @@ class RTPSession(BaseRTPSession):
         )
         if (playout or paced) and codec is None:
             raise RuntimeError("playout and paced modes require a codec")
+        if cn and not paced:
+            raise RuntimeError("comfort noise emission requires paced mode")
         self._codec = codec
         self._dtmf_payload_type = dtmf_payload_type
+        self._cn_payload_type = cn_payload_type
+        self._cn = cn
+        self._cn_level = float(DEFAULT_CN_LEVEL)
 
         # Receiver — in playout mode the buffering depth lives in
         # AdaptivePlayout; the jitter buffer only reorders and assembles.
@@ -93,6 +101,9 @@ class RTPSession(BaseRTPSession):
         # Callbacks
         self.on_audio: Callable[[bytes, int], None] | None = None
         self.on_dtmf: Callable[[str, int], None] | None = None
+        self.on_cn: Callable[[int], None] | None = None
+        """Called with the -dBov level of received RFC 3389 packets
+        (arrival-driven mode only; playout mode generates the noise)."""
 
         # Dispatch indirection so on_dtmf can be assigned after packets arrive
         self._dtmf_receiver = DtmfReceiver(self._dispatch_dtmf)
@@ -123,6 +134,8 @@ class RTPSession(BaseRTPSession):
         playout: bool = False,
         playout_max_delay_ms: int = 200,
         paced: bool = False,
+        cn: bool = False,
+        cn_payload_type: int = 13,
         nack_retransmit: bool = False,
         symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
@@ -146,6 +159,8 @@ class RTPSession(BaseRTPSession):
             playout=playout,
             playout_max_delay_ms=playout_max_delay_ms,
             paced=paced,
+            cn=cn,
+            cn_payload_type=cn_payload_type,
             nack_retransmit=nack_retransmit,
             symmetric_rtp=symmetric_rtp,
             port_allocator=port_allocator,
@@ -171,6 +186,8 @@ class RTPSession(BaseRTPSession):
             session._paced_sender = PacedSender(
                 session._sender,
                 get_addr=lambda: session._remote_addr,
+                cn_payload_type=cn_payload_type if cn else None,
+                get_cn_level=lambda: round(session._cn_level),
             )
             session._pacer_clock = MediaClock(
                 codec.samples_per_frame / codec.sample_rate,
@@ -205,21 +222,33 @@ class RTPSession(BaseRTPSession):
 
         # Check for DTMF
         if packet.payload_type == self._dtmf_payload_type:
-            # Telephone-events consume audio sequence numbers: mark the
-            # slot so the jitter buffer never reads it as packet loss.
-            # The marker may complete a pending pre-digit frame.
-            frame = self._jitter_buffer.mark_non_media(packet.sequence_number)
+            self._handle_non_media(packet)
             if self._playout is not None:
                 # RFC 4733 packets replace audio while a digit is sent —
                 # sender suppression, not loss
                 self._playout.suppress()
-            elif frame is not None:
-                self._deliver_audio_frame(frame)
             self._dtmf_receiver.handle_packet(packet)
+            return
+
+        # Comfort noise (RFC 3389) — a silence descriptor, not media
+        if packet.payload_type == self._cn_payload_type:
+            self._handle_non_media(packet)
+            level = parse_cn_payload(packet.payload)
+            if self._playout is not None:
+                self._playout.set_cn(level, packet.timestamp)
+            elif self.on_cn is not None:
+                self.on_cn(level)
             return
 
         # Add to jitter buffer
         pli_flag, frame = self._jitter_buffer.add(packet)
+        if frame is not None:
+            self._deliver_audio_frame(frame)
+
+    def _handle_non_media(self, packet: RtpPacket) -> None:
+        """Mark a non-media sequence number (RFC 4733/3389 packets consume
+        sequence numbers) and deliver any frame the marker unblocks."""
+        frame = self._jitter_buffer.mark_non_media(packet.sequence_number)
         if frame is not None:
             self._deliver_audio_frame(frame)
 
@@ -332,6 +361,9 @@ class RTPSession(BaseRTPSession):
         """
         if self._codec is None:
             raise RuntimeError("No codec configured for PCM encoding")
+        if self._cn:
+            # Track the stream energy so comfort noise matches it
+            self._cn_level += (measure_level(pcm) - self._cn_level) / 8.0
         encoded = self._codec.encode(pcm)
         return self.send_audio_auto(encoded)
 
