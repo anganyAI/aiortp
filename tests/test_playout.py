@@ -229,3 +229,32 @@ def test_stats_shape() -> None:
         "playout_target_ms",
     }
     assert stats["playout_target_ms"] == 20.0  # one frame at zero jitter
+
+
+def test_offgrid_entries_do_not_accumulate() -> None:
+    """Timestamps off the head grid are pruned, not hoarded forever."""
+    p, clock = _playout()
+    for i in range(60):
+        p.put(i * SPF, _payload())
+        p.put(i * SPF + 80, _payload())  # off-grid: never matches the head
+        clock.advance(PTIME)
+        p.tick()
+    assert len(p._frames) <= 2 * p._max_frames + 2
+    assert p.late_dropped > 0  # pruned entries are accounted for
+
+
+def test_gap_jump_ignores_stale_offgrid_entries() -> None:
+    """The post-burst jump goes forward, never back to a stale timestamp."""
+    p, clock = _playout()
+    p.put(0, _payload())
+    p.put(SPF, _payload())
+    assert p.tick() is not None
+    assert p.tick() is not None  # head = 320
+
+    p.put(2 * SPF + 80, _payload(500))  # off-grid, soon behind the head
+    p.put(20 * SPF, _payload(2000))  # the real resume point
+    for _ in range(6):
+        assert p.tick() is not None  # concealment budget
+    resumed = p.tick()
+    assert resumed is not None
+    assert resumed[1] == 20 * SPF  # jumped forward, not to ts=400

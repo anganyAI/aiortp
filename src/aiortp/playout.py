@@ -23,7 +23,7 @@ from collections.abc import Callable
 
 from .codecs import Codec
 from .plc import PcmConcealer
-from .utils import uint32_add
+from .utils import uint32_add, uint32_gt
 
 logger = logging.getLogger(__name__)
 
@@ -134,10 +134,10 @@ class AdaptivePlayout:
     def put(self, timestamp: int, payload: bytes) -> None:
         """Buffer an encoded frame for playout."""
         if self._head is not None:
-            ahead = (timestamp - self._head) & 0xFFFFFFFF
-            if ahead >= 0x80000000:
+            if uint32_gt(self._head, timestamp):
                 self.late_dropped += 1
                 return
+            ahead = uint32_add(timestamp, -self._head)
             if ahead > 4 * self._max_frames * self._increment:
                 logger.info("Playout resync: timestamp jumped ahead by %d", ahead)
                 self.reset()
@@ -149,9 +149,9 @@ class AdaptivePlayout:
     def _measure_jitter(self, timestamp: int) -> None:
         arrival = self._now()
         if self._last_arrival is not None and self._last_ts is not None:
-            ts_delta = (timestamp - self._last_ts) & 0xFFFFFFFF
-            if ts_delta >= 0x80000000:
+            if uint32_gt(self._last_ts, timestamp):
                 return  # reordered arrival — keep the newer reference
+            ts_delta = uint32_add(timestamp, -self._last_ts)
             expected_ms = ts_delta / self._increment * self._ptime_ms
             deviation = abs((arrival - self._last_arrival) * 1000.0 - expected_ms)
             self._jitter_ms += (deviation - self._jitter_ms) / 16.0
@@ -162,9 +162,22 @@ class AdaptivePlayout:
         timestamps = iter(self._frames)
         best = next(timestamps)
         for ts in timestamps:
-            if ((best - ts) & 0xFFFFFFFF) < 0x80000000 and best != ts:
+            if uint32_gt(best, ts):
                 best = ts
         return best
+
+    def _prune_stale(self) -> None:
+        """Drop entries the head has walked past (off-grid timestamps).
+
+        tick() only consumes exact grid matches, so a sender whose
+        timestamps drift off the head grid would otherwise grow the
+        buffer without bound.
+        """
+        assert self._head is not None
+        stale = [ts for ts in self._frames if uint32_gt(self._head, ts)]
+        for ts in stale:
+            del self._frames[ts]
+        self.late_dropped += len(stale)
 
     # ── Playout ──────────────────────────────────────────────
 
@@ -172,6 +185,8 @@ class AdaptivePlayout:
         """Produce the next ptime of audio, or None while priming/suspended."""
         if self._head is None:
             return None
+        if len(self._frames) > 2 * self._max_frames:
+            self._prune_stale()
         adjust = self._update_adaptation()
         if adjust < 0 and self._concealer.frame_samples:
             # Expansion: deliver concealment without consuming, growing
@@ -223,6 +238,7 @@ class AdaptivePlayout:
 
     def _underrun(self, out_ts: int) -> tuple[bytes, int] | None:
         if self._conceal_streak_ms >= self._max_conceal_ms:
+            self._prune_stale()
             if self._frames:
                 # Long burst with later frames waiting: jump over the gap
                 self._head = self._earliest()
