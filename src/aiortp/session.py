@@ -67,7 +67,7 @@ class RTPSession(BaseRTPSession):
         self._codec = codec
         self._dtmf_payload_type = dtmf_payload_type
         self._cn_payload_type = cn_payload_type
-        self._cn = cn
+        self._cn_enabled = cn
         self._cn_level = float(DEFAULT_CN_LEVEL)
 
         # Receiver — in playout mode the buffering depth lives in
@@ -361,7 +361,7 @@ class RTPSession(BaseRTPSession):
         """
         if self._codec is None:
             raise RuntimeError("No codec configured for PCM encoding")
-        if self._cn:
+        if self._cn_enabled:
             # Track the stream energy so comfort noise matches it
             self._cn_level += (measure_level(pcm) - self._cn_level) / 8.0
         encoded = self._codec.encode(pcm)
