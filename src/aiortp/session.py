@@ -8,7 +8,7 @@ from .base_session import BaseRTPSession
 from .clock import MediaClock
 from .codecs import Codec, get_codec
 from .dtmf import DtmfReceiver, DtmfSender
-from .jitterbuffer import JitterBuffer
+from .jitterbuffer import JitterBuffer, JitterFrame
 from .pacer import PacedSender
 from .packet import (
     RTCP_RTPFB_NACK,
@@ -193,10 +193,16 @@ class RTPSession(BaseRTPSession):
 
         # Check for DTMF
         if packet.payload_type == self._dtmf_payload_type:
+            # Telephone-events consume audio sequence numbers: mark the
+            # slot so the jitter buffer never reads it as packet loss.
+            # The marker may complete a pending pre-digit frame.
+            frame = self._jitter_buffer.mark_non_media(packet.sequence_number)
             if self._playout is not None:
                 # RFC 4733 packets replace audio while a digit is sent —
                 # sender suppression, not loss
                 self._playout.suppress()
+            elif frame is not None:
+                self._deliver_audio_frame(frame)
             self._dtmf_receiver.handle_packet(packet)
             return
 
@@ -212,8 +218,11 @@ class RTPSession(BaseRTPSession):
 
         # Add to jitter buffer
         pli_flag, frame = self._jitter_buffer.add(packet)
-        if frame is None:
-            return
+        if frame is not None:
+            self._deliver_audio_frame(frame)
+
+    def _deliver_audio_frame(self, frame: JitterFrame) -> None:
+        """Route an assembled frame to the playout buffer or on_audio."""
         if self._playout is not None:
             self._playout.put(frame.timestamp, frame.data)
             return

@@ -650,3 +650,46 @@ async def test_paced_to_playout_loopback() -> None:
 
     await session_a.close()
     await session_b.close()
+
+
+def _inject_dtmf(session: RTPSession, seq: int, end: bool) -> None:
+    ev = DtmfEvent(event=5, end=end, volume=10, duration=800)
+    packet = RtpPacket(payload_type=101, sequence_number=seq, timestamp=480, payload=ev.serialize())
+    session._handle_rtp(packet.serialize(), _ADDR)
+
+
+def test_dtmf_packets_do_not_trigger_concealment() -> None:
+    """RFC 4733 packets consume sequence numbers but must not read as loss."""
+    session = _plc_session()
+    received: list[tuple[bytes, int]] = []
+    session.on_audio = lambda pcm, ts: received.append((pcm, ts))
+    digits: list[str] = []
+    session.on_dtmf = lambda digit, duration: digits.append(digit)
+
+    _inject_pcmu(session, (0, 1, 2))
+    for seq in range(3, 10):
+        _inject_dtmf(session, seq, end=False)
+    for seq in range(10, 13):
+        _inject_dtmf(session, seq, end=True)
+    _inject_pcmu(session, (13, 14, 15))
+
+    assert digits == ["5"]
+    assert session.stats["concealed_frames"] == 0  # no phantom loss from the digit
+    assert [ts for _, ts in received] == [0, 160, 320, 13 * 160, 14 * 160]
+
+
+def test_real_loss_concealed_exactly_next_to_dtmf() -> None:
+    """Concealment equals true drops even with a digit in the stream."""
+    session = _plc_session()
+    received: list[tuple[bytes, int]] = []
+    session.on_audio = lambda pcm, ts: received.append((pcm, ts))
+    session.on_dtmf = lambda digit, duration: None
+
+    _inject_pcmu(session, (0, 1, 2))
+    for seq in range(3, 13):
+        _inject_dtmf(session, seq, end=seq >= 10)
+    _inject_pcmu(session, (13, 15, 16))  # seq 14 genuinely lost
+
+    assert session.stats["concealed_frames"] == 1  # exactly the dropped packet
+    # Timeline stays continuous: concealment PCM fills the seq-14 slot
+    assert [ts for _, ts in received] == [0, 160, 320, 13 * 160, 14 * 160, 15 * 160]

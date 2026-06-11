@@ -448,3 +448,68 @@ class AudioGapHandlingTest(TestCase):
         # seq1 lost, but seq2 has SAME timestamp — not a new audio frame
         _, frame = jbuffer.add(RtpPacket(sequence_number=2, timestamp=100, payload=b"C"))
         self.assertIsNone(frame)  # same ts → not a frame boundary
+
+
+class NonMediaMarkingTest(TestCase):
+    """RFC 4733 packets consume sequence numbers; their slots must take
+    part in gap analysis without ever reading as packet loss."""
+
+    def _feed(self, jbuffer: JitterBuffer, seq: int, ts: int):
+        _, frame = jbuffer.add(RtpPacket(sequence_number=seq, timestamp=ts, payload=b"x" * 4))
+        return frame
+
+    def test_marker_slots_are_not_lost(self) -> None:
+        jbuffer = JitterBuffer(capacity=16, prefetch=0, skip_audio_gaps=True)
+        frames = []
+        for seq in range(3):
+            if (frame := self._feed(jbuffer, seq, seq * 160)) is not None:
+                frames.append(frame)
+        for seq in range(3, 13):  # one DTMF digit: ten packets
+            if (frame := jbuffer.mark_non_media(seq)) is not None:
+                frames.append(frame)
+        for seq in (13, 14):
+            if (frame := self._feed(jbuffer, seq, seq * 160)) is not None:
+                frames.append(frame)
+        self.assertEqual([f.timestamp for f in frames], [0, 160, 320, 13 * 160])
+        self.assertEqual([f.lost for f in frames], [0, 0, 0, 0])
+
+    def test_marker_completes_pending_frame(self) -> None:
+        jbuffer = JitterBuffer(capacity=16, prefetch=0)
+        _, frame = jbuffer.add(RtpPacket(sequence_number=0, timestamp=0, payload=b"x"))
+        self.assertIsNone(frame)
+        completed = jbuffer.mark_non_media(1)
+        assert completed is not None
+        self.assertEqual(completed.timestamp, 0)
+        self.assertEqual(completed.lost, 0)
+
+    def test_real_loss_still_counted_next_to_markers(self) -> None:
+        jbuffer = JitterBuffer(capacity=16, prefetch=0, skip_audio_gaps=True)
+        self._feed(jbuffer, 0, 0)
+        self._feed(jbuffer, 1, 160)
+        # seq 2 lost, seq 3 is a telephone-event, audio resumes at 4
+        completed = jbuffer.mark_non_media(3)
+        assert completed is not None
+        self.assertEqual(completed.timestamp, 160)
+        self.assertEqual(completed.lost, 0)
+        self._feed(jbuffer, 4, 640)
+        frame = self._feed(jbuffer, 5, 800)
+        assert frame is not None
+        self.assertEqual(frame.timestamp, 640)
+        self.assertEqual(frame.lost, 1)  # only the true gap at seq 2
+
+    def test_marker_behind_origin_is_ignored(self) -> None:
+        jbuffer = JitterBuffer(capacity=16, prefetch=0)
+        self._feed(jbuffer, 10, 0)
+        self._feed(jbuffer, 11, 160)
+        self.assertIsNone(jbuffer.mark_non_media(9))
+
+    def test_markers_evicted_cleanly_on_overflow(self) -> None:
+        jbuffer = JitterBuffer(capacity=4, prefetch=0)
+        self._feed(jbuffer, 0, 0)
+        for seq in range(1, 8):  # markers wrap the buffer twice
+            jbuffer.mark_non_media(seq)
+        self._feed(jbuffer, 8, 1280)
+        frame = self._feed(jbuffer, 9, 1440)
+        assert frame is not None
+        self.assertEqual(frame.timestamp, 1280)
+        self.assertEqual(frame.lost, 0)

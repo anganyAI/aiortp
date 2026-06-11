@@ -3,6 +3,11 @@ from .utils import uint16_add
 
 MAX_MISORDER = 100
 
+# Identity marker for sequence numbers consumed by non-media packets
+# (RFC 4733 telephone-events): the slot takes part in gap analysis but
+# is never counted as lost nor assembled into a frame.
+_NON_MEDIA = RtpPacket()
+
 
 class JitterFrame:
     def __init__(self, data: bytes, timestamp: int, lost: int = 0) -> None:
@@ -38,41 +43,62 @@ class JitterBuffer:
         self._origin = None
 
     def add(self, packet: RtpPacket) -> tuple[bool, JitterFrame | None]:
-        pli_flag = False
-        if self._origin is None:
-            self._origin = packet.sequence_number
-            delta = 0
-            misorder = 0
-        else:
-            delta = uint16_add(packet.sequence_number, -self._origin)
-            misorder = uint16_add(self._origin, -packet.sequence_number)
-
-        if misorder < delta:
-            if misorder >= MAX_MISORDER:
-                self.remove(self.capacity)
-                self._origin = packet.sequence_number
-                delta = misorder = 0
-                if self._is_video:
-                    pli_flag = True
-            else:
-                return pli_flag, None
-
-        if delta >= self.capacity:
-            # remove just enough frames to fit the received packets
-            excess = delta - self.capacity + 1
-            if self.smart_remove(excess):
-                self._origin = packet.sequence_number
-            if self._is_video:
-                pli_flag = True
-
-        pos = packet.sequence_number % self._capacity
-        self._packets[pos] = packet
+        pli_flag, stored = self._place(packet, packet.sequence_number)
+        if not stored:
+            return pli_flag, None
 
         self._video_gap_skipped = False
         frame = self._remove_frame(packet.sequence_number)
         if self._video_gap_skipped:
             pli_flag = True
         return pli_flag, frame
+
+    def mark_non_media(self, sequence_number: int) -> JitterFrame | None:
+        """Occupy *sequence_number* without media (e.g. RFC 4733 packets).
+
+        Telephone-event packets share the audio sequence space; without a
+        marker their slots read as packet loss.  The marker also acts as a
+        frame boundary, so it may complete a pending frame — returned here.
+        """
+        _, stored = self._place(_NON_MEDIA, sequence_number)
+        if not stored:
+            return None
+        return self._remove_frame(sequence_number)
+
+    def _place(self, packet: RtpPacket, sequence_number: int) -> tuple[bool, bool]:
+        """Store *packet* at its slot, managing origin, misorder and capacity.
+
+        Returns (pli_flag, stored).
+        """
+        pli_flag = False
+        if self._origin is None:
+            self._origin = sequence_number
+            delta = 0
+            misorder = 0
+        else:
+            delta = uint16_add(sequence_number, -self._origin)
+            misorder = uint16_add(self._origin, -sequence_number)
+
+        if misorder < delta:
+            if misorder >= MAX_MISORDER:
+                self.remove(self.capacity)
+                self._origin = sequence_number
+                delta = misorder = 0
+                if self._is_video:
+                    pli_flag = True
+            else:
+                return pli_flag, False
+
+        if delta >= self.capacity:
+            # remove just enough frames to fit the received packets
+            excess = delta - self.capacity + 1
+            if self.smart_remove(excess):
+                self._origin = sequence_number
+            if self._is_video:
+                pli_flag = True
+
+        self._packets[sequence_number % self._capacity] = packet
+        return pli_flag, True
 
     def _remove_frame(self, sequence_number: int) -> JitterFrame | None:
         if self._is_video:
@@ -154,31 +180,33 @@ class JitterBuffer:
         for count in range(self.capacity):
             pos = (self._origin + count) % self._capacity  # type: ignore[operator]
             packet = self._packets[pos]
-            if packet is None:
-                if self._skip_audio_gaps and self._has_later_packet(count, timestamp):
-                    # Audio gap handling: a received packet exists after this
-                    # gap, so the missing slot is a lost packet.  Complete the
-                    # current in-progress frame and continue scanning.
-                    if packets:
-                        if frame is None:
-                            frame = JitterFrame(
-                                data=b"".join([x.payload for x in packets]),
-                                timestamp=timestamp,
-                                lost=lost,
-                            )
-                            remove = count
-                        frames += 1
-                        if frames >= self._prefetch:
-                            self.remove(remove)
-                            return frame
-                        packets = []
-                        timestamp = None
-                    elif frame is None:
-                        # Confirmed-lost slot ahead of the next frame — count
-                        # it so the delivered frame reports the missing audio.
-                        lost += 1
-                    continue
-                break
+            if packet is None or packet is _NON_MEDIA:
+                is_gap = packet is None
+                confirmed = self._skip_audio_gaps and self._has_later_packet(count, timestamp)
+                if is_gap and not confirmed:
+                    break
+                # Slot consumed without media: a confirmed-lost packet or a
+                # non-media marker (RFC 4733).  Both complete the current
+                # in-progress frame; only true gaps count as lost.
+                if packets:
+                    if frame is None:
+                        frame = JitterFrame(
+                            data=b"".join([x.payload for x in packets]),
+                            timestamp=timestamp,
+                            lost=lost,
+                        )
+                        remove = count
+                    frames += 1
+                    if frames >= self._prefetch:
+                        self.remove(remove)
+                        return frame
+                    packets = []
+                    timestamp = None
+                elif frame is None and is_gap:
+                    # Confirmed-lost slot ahead of the next frame — count
+                    # it so the delivered frame reports the missing audio.
+                    lost += 1
+                continue
 
             if timestamp is None:
                 timestamp = packet.timestamp
@@ -217,11 +245,15 @@ class JitterBuffer:
         for g in range(1, self._capacity - gap_offset):
             pos = (self._origin + gap_offset + g) % self._capacity  # type: ignore[operator]
             pkt = self._packets[pos]
-            if pkt is not None:
-                # Only skip if the packet after the gap starts a new frame
-                if current_timestamp is not None and pkt.timestamp == current_timestamp:
-                    return False
+            if pkt is None:
+                continue
+            if pkt is _NON_MEDIA:
+                # A received non-media packet proves later delivery
                 return True
+            # Only skip if the packet after the gap starts a new frame
+            if current_timestamp is not None and pkt.timestamp == current_timestamp:
+                return False
+            return True
         return False
 
     def remove(self, count: int) -> None:
@@ -240,7 +272,7 @@ class JitterBuffer:
         for i in range(self._capacity):
             pos = self._origin % self._capacity  # type: ignore[operator]
             packet = self._packets[pos]
-            if packet is not None:
+            if packet is not None and packet is not _NON_MEDIA:
                 if i >= count and timestamp != packet.timestamp:
                     break
                 timestamp = packet.timestamp
