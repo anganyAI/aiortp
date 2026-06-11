@@ -4,7 +4,13 @@ from .base import Codec
 
 try:
     import opuslib  # type: ignore[import-untyped]
-    import opuslib.api.decoder  # type: ignore[import-untyped]  # low-level API for native PLC
+
+    # Low-level APIs: decoder for native PLC, encoder ctl for DTX
+    # (opuslib's high-level _set_dtx wrapper is broken — it sends the
+    # get request)
+    import opuslib.api.ctl  # type: ignore[import-untyped]
+    import opuslib.api.decoder  # type: ignore[import-untyped]
+    import opuslib.api.encoder  # type: ignore[import-untyped]
 
     _HAS_OPUS = True
 except Exception:  # noqa: BLE001 — opuslib raises a plain Exception when libopus is missing
@@ -12,7 +18,13 @@ except Exception:  # noqa: BLE001 — opuslib raises a plain Exception when libo
 
 
 class OpusCodec(Codec):
-    def __init__(self, sample_rate: int = 48000, channels: int = 1, frame_ms: int = 20) -> None:
+    def __init__(
+        self,
+        sample_rate: int = 48000,
+        channels: int = 1,
+        frame_ms: int = 20,
+        dtx: bool = False,
+    ) -> None:
         if not _HAS_OPUS:
             raise ImportError(
                 "opuslib is required for Opus support. Install with: pip install aiortp[opus]"
@@ -23,6 +35,21 @@ class OpusCodec(Codec):
         self._samples_per_frame = sample_rate * frame_ms // 1000
         self._encoder = opuslib.Encoder(sample_rate, channels, opuslib.APPLICATION_VOIP)
         self._decoder = opuslib.Decoder(sample_rate, channels)
+        if dtx:
+            # Whether libopus actually emits DTX frames depends on its
+            # mode selection (SILK) and build; transmission suppression
+            # in aiortp is handled by paced mode + RFC 3389 CN regardless.
+            # Caveat: opus_encoder_ctl is variadic and ctypes cannot make
+            # variadic calls reliably on Apple Silicon — the flag may not
+            # reach the encoder there.
+            opuslib.api.encoder.encoder_ctl(self._encoder.encoder_state, opuslib.api.ctl.set_dtx, 1)
+
+    @property
+    def dtx(self) -> bool:
+        """Whether the encoder's DTX flag is set."""
+        return bool(
+            opuslib.api.encoder.encoder_ctl(self._encoder.encoder_state, opuslib.api.ctl.get_dtx)
+        )
 
     @property
     def name(self) -> str:

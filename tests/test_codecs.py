@@ -1,4 +1,6 @@
+import platform
 import struct
+import sys
 import unittest
 from unittest import TestCase
 
@@ -177,6 +179,19 @@ class OpusPlcTest(TestCase):
         codec = OpusCodec(sample_rate=48000, channels=1)
         codec.decode(codec.encode(b"\x00\x00" * 960))
         self.assertEqual(len(codec.conceal(1920)), 2 * 1920)
+
+    def test_dtx_construction_and_encode(self) -> None:
+        codec = OpusCodec(sample_rate=48000, channels=1, dtx=True)
+        pcm = struct.pack("<960h", *([0] * 960))
+        self.assertTrue(codec.decode(codec.encode(pcm)))
+
+    @unittest.skipIf(
+        sys.platform == "darwin" and platform.machine() == "arm64",
+        "ctypes cannot make variadic encoder_ctl calls reliably on Apple Silicon",
+    )
+    def test_dtx_flag_roundtrip(self) -> None:
+        self.assertTrue(OpusCodec(sample_rate=48000, channels=1, dtx=True).dtx)
+        self.assertFalse(OpusCodec(sample_rate=48000, channels=1).dtx)
 
 
 class RegistryTest(TestCase):
