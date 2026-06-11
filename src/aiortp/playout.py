@@ -10,9 +10,12 @@ Frames are decoded at consumption time, not arrival time, so the
 decoder sees decode and conceal calls in playout order (libopus PLC
 state stays aligned) and late-dropped frames are never decoded.
 
-The timestamp grid is ``codec.samples_per_frame`` — this library's
-sender convention, including for G.722 where it deliberately diverges
-from the RFC 3551 8 kHz RTP clock.
+The timestamp grid follows the wire: it defaults to
+``codec.samples_per_frame`` (this library's sender convention) and is
+re-detected at priming from the spacing of the buffered frames, so
+senders that clock G.722 per RFC 3551 (8 kHz RTP clock — 160 units per
+20 ms frame, as real carriers do) land on the grid instead of being
+half-dropped as late.
 """
 
 from __future__ import annotations
@@ -54,8 +57,17 @@ class AdaptivePlayout:
         max_delay_ms: int = 200,
         max_conceal_ms: int = DEFAULT_MAX_CONCEAL_MS,
         now: Callable[[], float] = time.monotonic,
+        clock_rate: int | None = None,
     ) -> None:
         self._codec = codec
+        # The only legitimate alternative grid step: what the RTP clock
+        # implies for one frame (RFC 3551 — for G.722 that is 160 while
+        # the codec frame is 320 samples).  None/equal disables detection.
+        self._wire_increment = (
+            clock_rate * codec.samples_per_frame // codec.sample_rate
+            if clock_rate
+            else codec.samples_per_frame
+        )
         self._concealer = PcmConcealer(sample_rate=codec.sample_rate)
         self._now = now
         self._increment = codec.samples_per_frame
@@ -125,6 +137,7 @@ class AdaptivePlayout:
         """Forget the stream position and buffered frames (new source)."""
         self._frames.clear()
         self._head = None
+        self._increment = self._codec.samples_per_frame  # re-detect on next priming
         self._jitter_ms = 0.0
         self._last_arrival = None
         self._last_ts = None
@@ -182,7 +195,33 @@ class AdaptivePlayout:
         self._measure_jitter(timestamp)
         self._frames[timestamp] = payload
         if self._head is None and len(self._frames) >= PRIME_FRAMES:
+            self._detect_wire_increment()
             self._head = self._earliest()
+
+    def _detect_wire_increment(self) -> None:
+        """Adopt the sender's timestamp step when it is finer than ours.
+
+        Real carriers clock G.722 per RFC 3551 (8 kHz RTP clock: 160
+        units per 20 ms frame) while this library's own sender steps by
+        ``samples_per_frame`` (320).  The grid must match the wire or
+        every other frame falls between slots.  Only the clock-implied
+        step is ever adopted — arbitrary off-grid spacings are sender
+        bugs and stay subject to pruning.
+        """
+        if self._wire_increment == self._increment:
+            return
+        earliest = self._earliest()
+        delta = min(
+            (uint32_add(ts, -earliest) for ts in self._frames if ts != earliest),
+            default=0,
+        )
+        if delta == self._wire_increment and delta != self._increment:
+            logger.info(
+                "Playout grid: wire timestamp step %d (codec frame %d) — following the wire clock",
+                delta,
+                self._increment,
+            )
+            self._increment = delta
 
     def _measure_jitter(self, timestamp: int) -> None:
         arrival = self._now()

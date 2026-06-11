@@ -73,7 +73,7 @@ class RTPSession(BaseRTPSession):
         # Receiver — in playout mode the buffering depth lives in
         # AdaptivePlayout; the jitter buffer only reorders and assembles.
         self._playout = (
-            AdaptivePlayout(codec, max_delay_ms=playout_max_delay_ms)
+            AdaptivePlayout(codec, max_delay_ms=playout_max_delay_ms, clock_rate=clock_rate)
             if playout and codec is not None
             else None
         )

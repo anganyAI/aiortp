@@ -376,3 +376,80 @@ def test_cn_refresh_does_not_reintroduce_concealment() -> None:
     assert frame is not None
     assert p.cn_frames == 4  # still noise
     assert p.concealed_frames == 0  # no phantom concealment
+
+
+class _G722Like:
+    """Codec stub with the G.722 quirk: 320 samples/frame, RFC wire clock 160."""
+
+    name = "g722-like"
+    sample_rate = 16000
+    samples_per_frame = 320
+
+    def encode(self, pcm: bytes) -> bytes:
+        return pcm[: len(pcm) // 4]
+
+    def decode(self, payload: bytes) -> bytes:
+        return payload * 4
+
+    def conceal(self, num_samples: int) -> bytes | None:
+        return None
+
+
+def test_rfc3551_wire_clock_detected() -> None:
+    """A carrier clocking G.722 at 8 kHz (step 160) lands on the grid."""
+    clock = FakeTime()
+    p = AdaptivePlayout(_G722Like(), now=clock, clock_rate=8000)
+
+    frame = b"\x10" * 160  # 20 ms of encoded G.722
+    for i in range(6):
+        p.put(i * 160, frame)  # RFC 3551 wire steps
+
+    delivered = []
+    for _ in range(6):
+        out = p.tick()
+        if out is not None:
+            delivered.append(out[1])
+        clock.advance(0.02)
+
+    assert delivered == [0, 160, 320, 480, 640, 800]
+    assert p.late_dropped == 0
+    assert p.concealed_frames == 0
+
+
+def test_lib_sender_convention_unchanged() -> None:
+    """This library's own G.722 sender (step 320) still lands on the grid."""
+    clock = FakeTime()
+    p = AdaptivePlayout(_G722Like(), now=clock, clock_rate=8000)
+
+    frame = b"\x10" * 160
+    for i in range(4):
+        p.put(i * 320, frame)
+
+    delivered = []
+    for _ in range(4):
+        out = p.tick()
+        if out is not None:
+            delivered.append(out[1])
+        clock.advance(0.02)
+
+    assert delivered == [0, 320, 640, 960]
+    assert p.late_dropped == 0
+    assert p.concealed_frames == 0
+
+
+def test_wire_clock_redetected_after_reset() -> None:
+    """reset() restores the codec grid, then re-detects from the new stream."""
+    clock = FakeTime()
+    p = AdaptivePlayout(_G722Like(), now=clock, clock_rate=8000)
+    frame = b"\x10" * 160
+
+    p.put(0, frame)
+    p.put(160, frame)
+    assert p._increment == 160
+
+    p.reset()
+    assert p._increment == 320
+
+    p.put(5000, frame)
+    p.put(5160, frame)
+    assert p._increment == 160
