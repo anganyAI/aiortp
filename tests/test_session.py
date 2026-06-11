@@ -709,3 +709,20 @@ async def test_close_releases_drain_waiters() -> None:
         session.send_audio_auto(b"\x00" * 160)
     await session.close()
     await asyncio.wait_for(session.drain(), timeout=0.5)
+
+
+def test_dtmf_packets_counted_in_stream_stats() -> None:
+    """Telephone-events are received stream packets: RR loss stats must not
+    report them as lost (they consume sequence numbers)."""
+    session = _plc_session()
+    session.on_dtmf = lambda digit, duration: None
+
+    _inject_pcmu(session, (0, 1, 2))
+    for seq in range(3, 13):
+        _inject_dtmf(session, seq, end=seq >= 10)
+    _inject_pcmu(session, (13, 15))  # seq 14 genuinely lost
+
+    stats = session._stream_stats
+    assert stats is not None
+    assert stats.packets_received == 15  # 5 audio + 10 telephone-event
+    assert stats.packets_lost == 1  # only the true drop at seq 14

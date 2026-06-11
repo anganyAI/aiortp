@@ -191,6 +191,18 @@ class RTPSession(BaseRTPSession):
 
         self._latch_rtp_addr(addr)
 
+        # Learn remote SSRC from the first packet, relatch on change
+        if packet.ssrc != self._remote_ssrc:
+            self._remote_ssrc_changed(packet.ssrc)
+            self._jitter_buffer.reset()
+            if self._playout is not None:
+                self._playout.reset()
+
+        # Telephone-events are part of the stream: counting them keeps
+        # packets_lost/fraction_lost in receiver reports accurate.
+        assert self._stream_stats is not None
+        self._stream_stats.add(packet)
+
         # Check for DTMF
         if packet.payload_type == self._dtmf_payload_type:
             # Telephone-events consume audio sequence numbers: mark the
@@ -205,16 +217,6 @@ class RTPSession(BaseRTPSession):
                 self._deliver_audio_frame(frame)
             self._dtmf_receiver.handle_packet(packet)
             return
-
-        # Learn remote SSRC from first media packet, relatch on change
-        if packet.ssrc != self._remote_ssrc:
-            self._remote_ssrc_changed(packet.ssrc)
-            self._jitter_buffer.reset()
-            if self._playout is not None:
-                self._playout.reset()
-
-        assert self._stream_stats is not None
-        self._stream_stats.add(packet)
 
         # Add to jitter buffer
         pli_flag, frame = self._jitter_buffer.add(packet)
