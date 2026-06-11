@@ -82,4 +82,58 @@ async def test_drain_returns_immediately_when_empty() -> None:
 def test_stats_shape() -> None:
     sender, _ = _sender_with_recorder()
     pacer = PacedSender(sender, get_addr=lambda: None)
-    assert pacer.stats() == {"queue_depth": 0, "paced_sent": 0, "empty_ticks": 0}
+    assert pacer.stats() == {"queue_depth": 0, "paced_sent": 0, "empty_ticks": 0, "cn_sent": 0}
+
+
+class TestComfortNoise:
+    def _cn_pacer(self, level: int = 60) -> tuple[PacedSender, list[bytes]]:
+        sender, sent = _sender_with_recorder()
+        pacer = PacedSender(
+            sender,
+            get_addr=lambda: None,
+            cn_payload_type=13,
+            get_cn_level=lambda: level,
+        )
+        return pacer, sent
+
+    def test_cn_emitted_on_silence_transition(self) -> None:
+        pacer, sent = self._cn_pacer()
+        pacer.enqueue(b"\x00" * 160)
+        pacer.tick()  # audio
+        pacer.tick()  # silence starts -> one CN packet
+        pacer.tick()  # silence continues -> nothing
+        assert pacer.cn_sent == 1
+        assert len(sent) == 2
+        cn = RtpPacket.parse(sent[1])
+        assert cn.payload_type == 13
+        assert cn.payload == bytes([60])
+
+    def test_cn_not_sent_before_first_audio(self) -> None:
+        """Session start is not a silence transition."""
+        pacer, sent = self._cn_pacer()
+        for _ in range(5):
+            pacer.tick()
+        assert pacer.cn_sent == 0
+        assert sent == []
+
+    def test_cn_refresh_and_talkspurt_marker(self) -> None:
+        pacer, sent = self._cn_pacer()
+        pacer.enqueue(b"\x00" * 160)
+        pacer.tick()
+        for _ in range(151):  # 3 s of silence crosses one refresh boundary
+            pacer.tick()
+        assert pacer.cn_sent == 2
+
+        pacer.enqueue(b"\x01" * 160)
+        pacer.tick()
+        resumed = RtpPacket.parse(sent[-1])
+        assert resumed.marker == 1  # start of talkspurt after silence
+
+    def test_cn_disabled_by_default(self) -> None:
+        sender, sent = _sender_with_recorder()
+        pacer = PacedSender(sender, get_addr=lambda: None)
+        pacer.enqueue(b"\x00" * 160)
+        pacer.tick()
+        pacer.tick()
+        assert pacer.cn_sent == 0
+        assert len(sent) == 1
