@@ -225,6 +225,7 @@ def test_stats_shape() -> None:
         "expansions",
         "accelerations",
         "underrun_suspensions",
+        "cn_frames",
         "playout_delay_ms",
         "playout_target_ms",
     }
@@ -258,3 +259,100 @@ def test_gap_jump_ignores_stale_offgrid_entries() -> None:
     resumed = p.tick()
     assert resumed is not None
     assert resumed[1] == 20 * SPF  # jumped forward, not to ts=400
+
+
+def test_cn_state_generates_noise_on_the_grid() -> None:
+    """From the CN timestamp on, missing slots yield noise, not concealment."""
+    p, clock = _playout()
+    p.put(0, _payload())
+    p.put(SPF, _payload())
+    assert p.tick() is not None
+    assert p.tick() is not None  # head = 320
+
+    p.set_cn(60, 2 * SPF)
+    for i in range(10):
+        frame = p.tick()
+        assert frame is not None
+        assert frame[1] == (2 + i) * SPF
+        assert frame[0] != b"\x00" * len(frame[0])  # noise, not silence
+    assert p.cn_frames == 10
+    assert p.concealed_frames == 0
+    assert p.underrun_suspensions == 0
+
+
+def test_cn_applies_only_from_its_timestamp() -> None:
+    """Frames buffered before the silence point still play; loss before it
+    still conceals."""
+    p, clock = _playout()
+    p.put(0, _payload())
+    p.put(SPF, _payload())
+    p.put(3 * SPF, _payload())  # 2*SPF genuinely lost before the silence
+    p.set_cn(70, 4 * SPF)  # silence starts after the buffered frames
+
+    delivered = [p.tick() for _ in range(5)]
+    assert all(f is not None for f in delivered)
+    # 0 and 160 are real, 320 is concealed loss, 480 is real, then noise
+    assert [f[1] for f in delivered] == [0, SPF, 2 * SPF, 3 * SPF, 4 * SPF]  # type: ignore[index]
+    assert p.concealed_frames == 1
+    assert p.cn_frames == 1
+
+
+def test_cn_exits_on_resumed_media() -> None:
+    p, clock = _playout()
+    p.put(0, _payload())
+    p.put(SPF, _payload())
+    assert p.tick() is not None
+    assert p.tick() is not None
+    p.set_cn(60, 2 * SPF)
+    for _ in range(3):
+        assert p.tick() is not None  # noise: head reaches 5*SPF
+
+    p.put(5 * SPF, _payload())  # talkspurt resumes
+    resumed = p.tick()
+    assert resumed is not None and resumed[1] == 5 * SPF
+    assert p.cn_frames == 3
+    # CN state is gone: the next missing slot is loss again
+    assert p.tick() is not None
+    assert p.concealed_frames == 1
+
+
+def test_cn_from_suspension_restarts_timeline() -> None:
+    p, clock = _playout()
+    p.put(0, _payload())
+    p.put(SPF, _payload())
+    assert p.tick() is not None
+    assert p.tick() is not None
+    while p.tick() is not None:  # conceal budget then suspension
+        pass
+    assert p.underrun_suspensions == 1
+
+    p.set_cn(70, 1000 * SPF)
+    frame = p.tick()
+    assert frame is not None
+    assert frame[1] == 1001 * SPF  # grid restarts after the CN packet
+    assert p.cn_frames == 1
+
+
+def test_cn_timeout_suspends() -> None:
+    """30 s of noise without a single packet means a dead sender."""
+    p, clock = _playout()
+    p.set_cn(70, 0)
+    count = 0
+    while p.tick() is not None:
+        count += 1
+    assert count == 1500  # 30 s at 20 ms
+    assert p.underrun_suspensions == 1
+    assert p.tick() is None
+
+
+def test_suppress_and_reset_clear_cn() -> None:
+    p, clock = _playout()
+    p.set_cn(70, 0)
+    assert p.tick() is not None
+    p.suppress()
+    assert p.tick() is None
+
+    p.set_cn(70, 0)
+    assert p.tick() is not None
+    p.reset()
+    assert p.tick() is None

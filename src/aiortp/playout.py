@@ -21,9 +21,10 @@ import logging
 import time
 from collections.abc import Callable
 
+from .cn import NoiseGenerator
 from .codecs import Codec
 from .plc import PcmConcealer
-from .utils import uint32_add, uint32_gt
+from .utils import uint32_add, uint32_gt, uint32_gte
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,10 @@ DEFAULT_MAX_CONCEAL_MS = 120
 # minimum spacing between two adjustments
 ADJUST_PERSIST_TICKS = 25
 ADJUST_MIN_INTERVAL = 1.0
+
+# Continuous comfort noise without any packet means a dead sender, not
+# silence — RFC 3389 senders refresh CN every few seconds
+MAX_CN_MS = 30_000
 
 
 class AdaptivePlayout:
@@ -73,12 +78,19 @@ class AdaptivePlayout:
         self._last_adjust = now()
         self._conceal_streak_ms = 0.0
 
+        # Comfort noise state (RFC 3389): silence starts at _cn_from on
+        # the timeline — frames buffered before it still play normally
+        self._cn: NoiseGenerator | None = None
+        self._cn_from = 0
+        self._cn_ms = 0.0
+
         # Counters
         self.concealed_frames = 0
         self.late_dropped = 0
         self.expansions = 0
         self.accelerations = 0
         self.underrun_suspensions = 0
+        self.cn_frames = 0
 
     @property
     def ptime(self) -> float:
@@ -104,6 +116,7 @@ class AdaptivePlayout:
             "expansions": self.expansions,
             "accelerations": self.accelerations,
             "underrun_suspensions": self.underrun_suspensions,
+            "cn_frames": self.cn_frames,
             "playout_delay_ms": round(self.depth_ms, 1),
             "playout_target_ms": round(self.target_ms, 1),
         }
@@ -117,6 +130,8 @@ class AdaptivePlayout:
         self._last_ts = None
         self._conceal_streak_ms = 0.0
         self._deviation_ticks = 0
+        self._cn = None
+        self._cn_ms = 0.0
 
     def suppress(self) -> None:
         """Pause delivery on explicit sender suppression (e.g. DTMF digits).
@@ -128,6 +143,25 @@ class AdaptivePlayout:
         self._frames.clear()
         self._head = None
         self._conceal_streak_ms = 0.0
+        self._cn = None
+        self._cn_ms = 0.0
+
+    def set_cn(self, level: int, timestamp: int) -> None:
+        """Register sender silence (RFC 3389) starting at *timestamp*.
+
+        Frames buffered before that point still play normally; from there
+        on, ticks generate noise at *level* until media resumes.  When
+        delivery was suspended or never primed, the timeline restarts
+        from the CN packet's timestamp — no two-frame re-priming, the
+        grid keeps advancing under the noise.
+        """
+        if self._cn is None or self._cn.level != level:
+            self._cn = NoiseGenerator(level)
+        self._cn_from = timestamp
+        self._cn_ms = 0.0
+        self._conceal_streak_ms = 0.0
+        if self._head is None:
+            self._head = uint32_add(timestamp, self._increment)
 
     # ── Inbound ──────────────────────────────────────────────
 
@@ -187,7 +221,8 @@ class AdaptivePlayout:
             return None
         if len(self._frames) > 2 * self._max_frames:
             self._prune_stale()
-        adjust = self._update_adaptation()
+        # Depth adaptation is meaningless while generating comfort noise
+        adjust = 0 if self._in_cn(self._head) else self._update_adaptation()
         if adjust < 0 and self._concealer.frame_samples:
             # Expansion: deliver concealment without consuming, growing
             # the buffered depth by one frame
@@ -219,12 +254,21 @@ class AdaptivePlayout:
         self._last_adjust = self._now()
         return sign
 
+    def _in_cn(self, timestamp: int) -> bool:
+        return self._cn is not None and uint32_gte(timestamp, self._cn_from)
+
     def _consume(self) -> tuple[bytes, int] | None:
         assert self._head is not None
         out_ts = self._head
         payload = self._frames.pop(out_ts, None)
         if payload is None:
+            if self._in_cn(out_ts):
+                return self._cn_tick(out_ts)
             return self._underrun(out_ts)
+        if self._in_cn(out_ts):
+            # Media at/after the silence point: the talkspurt resumed
+            self._cn = None
+            self._cn_ms = 0.0
         self._conceal_streak_ms = 0.0
         self._head = uint32_add(out_ts, self._increment)
         try:
@@ -235,6 +279,21 @@ class AdaptivePlayout:
             return self._conceal_pcm(), out_ts
         self._concealer.update(pcm)
         return pcm, out_ts
+
+    def _cn_tick(self, out_ts: int) -> tuple[bytes, int] | None:
+        assert self._cn is not None
+        self._cn_ms += self._ptime_ms
+        if self._cn_ms > MAX_CN_MS:
+            # No packet at all for 30 s: the sender is gone, not silent
+            self._cn = None
+            self._cn_ms = 0.0
+            self._head = None
+            self.underrun_suspensions += 1
+            return None
+        self.cn_frames += 1
+        self._head = uint32_add(out_ts, self._increment)
+        samples = self._concealer.frame_samples or self._codec.samples_per_frame
+        return self._cn.generate(samples), out_ts
 
     def _underrun(self, out_ts: int) -> tuple[bytes, int] | None:
         if self._conceal_streak_ms >= self._max_conceal_ms:
