@@ -25,6 +25,7 @@ Portions derived from [aiortc](https://github.com/aiortc/aiortc) by Jeremy Lain�
 - **Port allocation** — `PortAllocator` for managed even/odd RTP/RTCP port pairs
 - **STUN** — inline Binding Responses (IPv4/IPv6, no MESSAGE-INTEGRITY) for simple connectivity probes — not a full ICE agent
 - **Symmetric RTP** — opt-in remote address latching from inbound packets (RFC 4961) for NAT traversal
+- **TX redundancy** — opt-in `duplicate_tx=True`: every datagram is re-sent one frame later (receivers dedupe by sequence number), riding out single losses and short bursts on degraded links at the cost of doubled bandwidth
 - **Mid-call robustness** — remote SSRC changes (re-INVITE, hold/resume, SBC failover) relatch automatically: stats and buffers reset, video re-keys via PLI
 - **Fully typed** — PEP 561 `py.typed` marker included
 

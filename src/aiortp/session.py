@@ -47,6 +47,7 @@ class RTPSession(BaseRTPSession):
         cn: bool = False,
         cn_payload_type: int = 13,
         nack_retransmit: bool = False,
+        duplicate_tx: bool = False,
         symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
     ) -> None:
@@ -57,6 +58,7 @@ class RTPSession(BaseRTPSession):
             cname=cname,
             rtcp_interval=rtcp_interval,
             nack_retransmit=nack_retransmit,
+            duplicate_tx=duplicate_tx,
             symmetric_rtp=symmetric_rtp,
             port_allocator=port_allocator,
         )
@@ -137,6 +139,7 @@ class RTPSession(BaseRTPSession):
         cn: bool = False,
         cn_payload_type: int = 13,
         nack_retransmit: bool = False,
+        duplicate_tx: bool = False,
         symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
     ) -> "RTPSession":
@@ -162,6 +165,7 @@ class RTPSession(BaseRTPSession):
             cn=cn,
             cn_payload_type=cn_payload_type,
             nack_retransmit=nack_retransmit,
+            duplicate_tx=duplicate_tx,
             symmetric_rtp=symmetric_rtp,
             port_allocator=port_allocator,
         )

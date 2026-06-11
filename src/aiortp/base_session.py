@@ -48,6 +48,7 @@ class BaseRTPSession:
         cname: str = "aiortp",
         rtcp_interval: float = 5.0,
         nack_retransmit: bool = False,
+        duplicate_tx: bool = False,
         symmetric_rtp: bool = False,
         port_allocator: PortAllocator | None = None,
     ) -> None:
@@ -57,6 +58,7 @@ class BaseRTPSession:
         self._cname = cname
         self._rtcp_interval = rtcp_interval
         self._nack_retransmit = nack_retransmit
+        self._duplicate_tx = duplicate_tx
         self._symmetric_rtp = symmetric_rtp
         self._port_allocator = port_allocator
 
@@ -159,6 +161,7 @@ class BaseRTPSession:
             ssrc=self._ssrc,
             clock_rate=self._clock_rate,
             enable_history=self._nack_retransmit,
+            duplicate_tx=self._duplicate_tx,
         )
 
         # Start RTCP loop

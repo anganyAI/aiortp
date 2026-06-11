@@ -18,6 +18,7 @@ class RtpSender:
         ssrc: int | None = None,
         clock_rate: int = 8000,
         enable_history: bool = True,
+        duplicate_tx: bool = False,
     ) -> None:
         self._transport = transport
         self._payload_type = payload_type
@@ -31,6 +32,14 @@ class RtpSender:
         # Packet history for NACK retransmission (seq -> serialized bytes)
         self._enable_history = enable_history
         self._history: dict[int, bytes] = {}
+
+        # Opt-in redundancy for lossy links: each send re-transmits the
+        # previous datagram, giving every packet a second transmission
+        # opportunity one frame (~20 ms) later without any timer.
+        # Receivers dedupe by sequence number, so this needs no
+        # negotiation; bandwidth doubles.
+        self._duplicate_tx = duplicate_tx
+        self._last_datagram: bytes | None = None
 
         # Auto-timestamp state
         self._current_timestamp = random32()
@@ -95,6 +104,10 @@ class RtpSender:
         )
         data = packet.serialize()
         self._transport.send(data, addr)
+        if self._duplicate_tx:
+            if self._last_datagram is not None:
+                self._transport.send(self._last_datagram, addr)
+            self._last_datagram = data
 
         # Store in history for NACK retransmission
         if self._enable_history:

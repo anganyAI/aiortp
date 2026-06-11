@@ -813,3 +813,54 @@ async def test_paced_cn_to_playout_loopback() -> None:
 
     await session_a.close()
     await session_b.close()
+
+
+def test_duplicate_tx_resends_previous_datagram() -> None:
+    """Each send re-transmits the previous datagram (second chance, no timer)."""
+    from aiortp.sender import RtpSender
+
+    sent: list[bytes] = []
+
+    class _Tap:
+        def send(self, data: bytes, addr=None) -> None:
+            sent.append(data)
+
+    sender = RtpSender(transport=_Tap(), payload_type=0, clock_rate=8000, duplicate_tx=True)
+    for i in range(3):
+        sender.send_frame(b"\x80" * 160, timestamp=i * 160)
+
+    # frame0; frame1+dup(frame0); frame2+dup(frame1)
+    assert len(sent) == 5
+    assert sent[2] == sent[1 - 1]  # dup of frame0
+    assert sent[4] == sent[2 - 1]  # dup of frame1
+
+
+def test_duplicate_tx_survives_loss_of_originals() -> None:
+    """Dropping every original still yields a complete stream via duplicates."""
+    session = _plc_session()
+    received: list[tuple[bytes, int]] = []
+    session.on_audio = lambda pcm, ts: received.append((pcm, ts))
+
+    from aiortp.sender import RtpSender
+
+    datagrams: list[bytes] = []
+
+    class _Tap:
+        def send(self, data: bytes, addr=None) -> None:
+            datagrams.append(data)
+
+    sender = RtpSender(transport=_Tap(), payload_type=0, clock_rate=8000, duplicate_tx=True)
+    payload = get_codec(0).encode(struct.pack("<160h", *([1000] * 160)))
+    for i in range(8):
+        sender.send_frame(payload, timestamp=i * 160)
+
+    # Drop every ORIGINAL transmission; deliver only the duplicates
+    # (odd indexes after the first frame) — the stream must still decode.
+    for idx, data in enumerate(datagrams):
+        is_duplicate = idx >= 2 and idx % 2 == 0
+        if is_duplicate:
+            session._handle_rtp(data, ("10.0.0.1", 5004))
+
+    assert len(received) >= 5  # frames flow despite all originals lost
+    timestamps = [ts for _, ts in received]
+    assert timestamps == sorted(timestamps)
