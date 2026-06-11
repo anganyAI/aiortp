@@ -155,9 +155,13 @@ class AdaptivePlayout:
         from the CN packet's timestamp — no two-frame re-priming, the
         grid keeps advancing under the noise.
         """
-        if self._cn is None or self._cn.level != level:
+        if self._cn is None:
+            # The silence origin is pinned on entry: refreshes carry later
+            # timestamps that would put the head back in concealment
+            self._cn_from = timestamp
             self._cn = NoiseGenerator(level)
-        self._cn_from = timestamp
+        elif self._cn.level != level:
+            self._cn = NoiseGenerator(level)
         self._cn_ms = 0.0
         self._conceal_streak_ms = 0.0
         if self._head is None:

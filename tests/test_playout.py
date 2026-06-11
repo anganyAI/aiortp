@@ -356,3 +356,23 @@ def test_suppress_and_reset_clear_cn() -> None:
     assert p.tick() is not None
     p.reset()
     assert p.tick() is None
+
+
+def test_cn_refresh_does_not_reintroduce_concealment() -> None:
+    """Refresh packets carry later timestamps; the silence origin must
+    stay pinned or the head falls back into concealment every 3 s."""
+    p, clock = _playout()
+    p.put(0, _payload())
+    p.put(SPF, _payload())
+    assert p.tick() is not None
+    assert p.tick() is not None  # head = 320
+
+    p.set_cn(60, 2 * SPF)
+    for _ in range(3):
+        assert p.tick() is not None  # noise; head = 5*SPF
+
+    p.set_cn(60, 10 * SPF)  # refresh with a timestamp ahead of the head
+    frame = p.tick()
+    assert frame is not None
+    assert p.cn_frames == 4  # still noise
+    assert p.concealed_frames == 0  # no phantom concealment
