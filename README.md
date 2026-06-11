@@ -25,6 +25,7 @@ Portions derived from [aiortc](https://github.com/aiortc/aiortc) by Jeremy Lain�
 - **Port allocation** — `PortAllocator` for managed even/odd RTP/RTCP port pairs
 - **STUN** — inline Binding Responses (IPv4/IPv6, no MESSAGE-INTEGRITY) for simple connectivity probes — not a full ICE agent
 - **Symmetric RTP** — opt-in remote address latching from inbound packets (RFC 4961) for NAT traversal
+- **Mid-call robustness** — remote SSRC changes (re-INVITE, hold/resume, SBC failover) relatch automatically: stats and buffers reset, video re-keys via PLI
 - **Fully typed** — PEP 561 `py.typed` marker included
 
 ## Installation
@@ -148,6 +149,9 @@ session = await RTPSession.create(
 print(session.stats["concealed_frames"])  # packets replaced by concealment
 ```
 
+In playout mode (`playout=True`) concealment is deadline-based inside the
+playout buffer instead — no extra configuration needed.
+
 ## Clocked Playout & Paced Sending
 
 With `playout=True`, `on_audio` fires on a steady ptime clock (20 ms ticks)
@@ -247,14 +251,39 @@ session = await RTPSession.create(
 # Ports are released automatically on close
 ```
 
+## NAT Traversal
+
+With `symmetric_rtp=True`, the remote RTP and RTCP addresses are latched
+from inbound packets (RFC 4961 / comedia) after a successful parse — the
+session keeps working when the peer sits behind NAT and its real source
+address differs from the SDP one. For signalled address changes
+(re-INVITE), `session.update_remote((host, port))` stays the explicit
+override. The transport also answers STUN Binding Requests so simple
+connectivity probes pass.
+
+## Session Statistics
+
+`session.stats` returns a snapshot dict; keys appear as features are used:
+
+- always: `ssrc`, `packets_sent`, `octets_sent`, `concealed_frames`
+- receiving: `packets_received`, `packets_lost`, `jitter`
+- from remote receiver reports: `remote_fraction_lost`, `remote_packets_lost`, `remote_jitter`
+- playout: `playout_delay_ms`, `playout_target_ms`, `expansions`, `accelerations`, `late_dropped`, `underrun_suspensions`, `cn_frames`
+- paced: `queue_depth`, `paced_sent`, `empty_ticks`, `cn_sent`
+
+`session.on_receiver_report` fires with each incoming RR block reporting
+on this session's stream.
+
 ## Codec Registry
 
 ```python
-from aiortp import get_codec, PayloadType
+from aiortp import get_codec, register_codec, PayloadType
 
-codec = get_codec(PayloadType.PCMU)  # or PCMA, L16, G722
+codec = get_codec(PayloadType.PCMU)  # or PCMA, L16, G722; Opus registers as PT 111
 encoded = codec.encode(pcm_bytes)
 decoded = codec.decode(encoded)
+
+register_codec(96, MyCodec)  # custom codecs: subclass aiortp.Codec
 ```
 
 ## Low-Level Packets
@@ -303,7 +332,7 @@ See the [`examples/`](examples/) directory:
 - **`dtmf.py`** — sending and receiving DTMF digits
 - **`codec_roundtrip.py`** — encode/decode with each built-in codec
 - **`raw_packets.py`** — low-level RTP/RTCP packet construction
-- **`send_wav.py`** — stream a WAV file over RTP
+- **`send_wav.py`** — stream a WAV file over RTP with paced sending
 
 ## License
 
