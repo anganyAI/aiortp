@@ -34,7 +34,7 @@ g722 = ["G722>=1.2.3"]  # 1.2.3+ accepts int16 buffers and returns array("h")
 opus = ["opuslib"]
 numpy = ["numpy>=1.26"]  # vectorised G.711 encode; the stdlib path is the fallback
 dev = [
-    "numpy>=1.26",
+    "aiortp[numpy]",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "mypy>=1.11",

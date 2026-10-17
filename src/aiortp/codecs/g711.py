@@ -6,8 +6,8 @@ and decode runs two ``bytes.translate`` passes (low byte, high byte)
 interleaved with slice assignment — all C-speed bulk operations.
 
 Encode uses numpy when it imports (``pip install aiortp[numpy]``): one
-``take`` does the whole lookup without creating an ``int`` per sample,
-which cuts the encode from ~4 µs to under 1 µs per 20 ms frame.  Both
+``take`` does the whole lookup without creating an ``int`` per sample.
+Without numpy, ``operator.itemgetter`` does it in one C loop.  Both
 paths produce the same bytes.
 """
 

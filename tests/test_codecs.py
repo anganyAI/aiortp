@@ -1,5 +1,6 @@
 import platform
 import struct
+import subprocess
 import sys
 import unittest
 from array import array
@@ -187,6 +188,24 @@ class StdlibEncoderTest(_EncoderPathTests, TestCase):
 @unittest.skipUnless(_HAS_NUMPY, "numpy not installed")
 class NumpyEncoderTest(_EncoderPathTests, TestCase):
     make_encoder = staticmethod(_numpy_encoder)
+
+
+class NumpyAbsentTest(TestCase):
+    def test_codecs_fall_back_to_stdlib(self) -> None:
+        # A fresh interpreter where ``import numpy`` fails, as on an install
+        # without the numpy extra.
+        script = (
+            "import struct, sys\n"
+            "sys.modules['numpy'] = None\n"
+            "from aiortp.codecs import g711\n"
+            "assert not g711._HAS_NUMPY\n"
+            "pcm = struct.pack('<65536h', *range(-32768, 32768))\n"
+            "for codec, ref in ((g711.PcmuCodec, g711._ulaw_encode_sample),\n"
+            "                   (g711.PcmaCodec, g711._alaw_encode_sample)):\n"
+            "    expected = bytes(ref(s) for s in range(-32768, 32768))\n"
+            "    assert codec().encode(pcm) == expected, codec\n"
+        )
+        subprocess.run([sys.executable, "-c", script], check=True)
 
 
 class L16CodecTest(TestCase):
