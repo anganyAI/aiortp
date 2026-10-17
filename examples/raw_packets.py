@@ -28,7 +28,7 @@ def main() -> None:
         sequence_number=1000,
         timestamp=8000,
         ssrc=0xDEADBEEF,
-        payload=b"\x80" * 160,  # 160 bytes of µ-law silence
+        payload=b"\xff" * 160,  # 160 bytes of µ-law silence
     )
     data = pkt.serialize()
     print(f"Serialized: {len(data)} bytes")
