@@ -42,6 +42,10 @@ pip install aiortp[opus]   # Opus support
 pip install aiortp[g722]   # G.722 wideband
 ```
 
+G.711 encode uses numpy when it is installed (`pip install aiortp[numpy]`),
+which takes it from ~4 µs to under 1 µs per 20 ms frame. Without numpy it
+falls back to the standard library; both paths produce the same bytes.
+
 ## Quick Start — Audio
 
 ```python

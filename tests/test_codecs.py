@@ -2,14 +2,18 @@ import platform
 import struct
 import sys
 import unittest
+from collections.abc import Callable
 from unittest import TestCase
 
 from aiortp.codecs import PayloadType, get_codec
 from aiortp.codecs.g711 import (
+    _HAS_NUMPY,
     PcmaCodec,
     PcmuCodec,
     _alaw_decode_sample,
     _alaw_encode_sample,
+    _numpy_encoder,
+    _stdlib_encoder,
     _ulaw_decode_sample,
     _ulaw_encode_sample,
 )
@@ -130,6 +134,47 @@ class G711ReferenceTest(TestCase):
     def test_encode_truncates_trailing_odd_byte(self) -> None:
         pcm = struct.pack("<2h", 1000, -1000)
         self.assertEqual(PcmuCodec().encode(pcm + b"\x7f"), PcmuCodec().encode(pcm))
+
+
+_ALL_SAMPLES = struct.pack("<65536h", *range(-32768, 32768))
+
+
+class _EncoderPathTests:
+    """Every encode path must produce the per-sample reference bytes."""
+
+    make_encoder: Callable[[bytes], Callable[[bytes], bytes]]
+
+    def test_ulaw_exhaustive(self) -> None:
+        encode = self.make_encoder(PcmuCodec._encode_table)
+        expected = bytes(_ulaw_encode_sample(s) for s in range(-32768, 32768))
+        self.assertEqual(encode(_ALL_SAMPLES), expected)
+
+    def test_alaw_exhaustive(self) -> None:
+        encode = self.make_encoder(PcmaCodec._encode_table)
+        expected = bytes(_alaw_encode_sample(s) for s in range(-32768, 32768))
+        self.assertEqual(encode(_ALL_SAMPLES), expected)
+
+    def test_empty(self) -> None:
+        self.assertEqual(self.make_encoder(PcmuCodec._encode_table)(b""), b"")
+
+    def test_single_sample(self) -> None:
+        encode = self.make_encoder(PcmuCodec._encode_table)
+        pcm = struct.pack("<h", -1000)
+        self.assertEqual(encode(pcm), bytes([_ulaw_encode_sample(-1000)]))
+
+    def test_truncates_trailing_odd_byte(self) -> None:
+        encode = self.make_encoder(PcmaCodec._encode_table)
+        pcm = struct.pack("<2h", 1000, -1000)
+        self.assertEqual(encode(pcm + b"\x7f"), encode(pcm))
+
+
+class StdlibEncoderTest(_EncoderPathTests, TestCase):
+    make_encoder = staticmethod(_stdlib_encoder)
+
+
+@unittest.skipUnless(_HAS_NUMPY, "numpy not installed")
+class NumpyEncoderTest(_EncoderPathTests, TestCase):
+    make_encoder = staticmethod(_numpy_encoder)
 
 
 class L16CodecTest(TestCase):
