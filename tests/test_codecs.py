@@ -2,6 +2,7 @@ import platform
 import struct
 import sys
 import unittest
+from array import array
 from collections.abc import Callable
 from unittest import TestCase
 
@@ -166,6 +167,17 @@ class _EncoderPathTests:
         encode = self.make_encoder(PcmaCodec._encode_table)
         pcm = struct.pack("<2h", 1000, -1000)
         self.assertEqual(encode(pcm + b"\x7f"), encode(pcm))
+
+    def test_accepts_byte_buffers(self) -> None:
+        encode = self.make_encoder(PcmuCodec._encode_table)
+        pcm = struct.pack("<3h", 1000, -1000, 32767)
+        self.assertEqual(encode(bytearray(pcm)), encode(pcm))
+        self.assertEqual(encode(memoryview(pcm)), encode(pcm))
+
+    def test_rejects_typed_buffer(self) -> None:
+        encode = self.make_encoder(PcmuCodec._encode_table)
+        with self.assertRaises(TypeError):
+            encode(array("h", [1000, -1000, 2000, -2000]))
 
 
 class StdlibEncoderTest(_EncoderPathTests, TestCase):

@@ -129,11 +129,21 @@ def _build_decode_tables(decode_sample: Callable[[int], int]) -> tuple[bytes, by
 # --- Encoders: s16le PCM -> codec bytes through an encode table ---
 
 
+def _whole_samples(pcm: bytes) -> memoryview:
+    """Return ``pcm`` as a byte view trimmed to whole 16-bit samples."""
+    view = memoryview(pcm)
+    if view.itemsize != 1:
+        # A typed buffer (array("h"), an int16 ndarray) is not s16le bytes on
+        # every host; refuse it rather than reinterpret it.
+        raise TypeError(f"G.711 encode takes s16le bytes, not a {view.format!r} buffer")
+    return view[: len(view) // 2 * 2]
+
+
 def _stdlib_encoder(table: bytes) -> _Encoder:
     """Build an encoder that looks each native-order u16 sample up in ``table``."""
 
     def encode(pcm: bytes) -> bytes:
-        samples = memoryview(pcm)[: len(pcm) // 2 * 2].cast("H")
+        samples = _whole_samples(pcm).cast("H")
         if len(samples) < 2:
             # itemgetter returns a lone item, not a 1-tuple, for one index
             return bytes(table[s] for s in samples)
@@ -147,7 +157,7 @@ def _numpy_encoder(table: bytes) -> _Encoder:
     lut = np.frombuffer(table, dtype=np.uint8)
 
     def encode(pcm: bytes) -> bytes:
-        samples = np.frombuffer(pcm, dtype="=u2", count=len(pcm) // 2)
+        samples = np.frombuffer(_whole_samples(pcm), dtype="=u2")
         encoded: bytes = lut.take(samples).tobytes()  # numpy is untyped here, see pyproject
         return encoded
 
