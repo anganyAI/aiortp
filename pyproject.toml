@@ -41,7 +41,7 @@ dev = [
     "ruff>=0.6",
     "bandit>=1.7",
     "build>=1.0",
-    "twine>=5.0",
+    "twine>=7.0",  # 6.x rejects the Metadata-Version 2.5 that current hatchling writes
 ]
 
 [project.urls]
